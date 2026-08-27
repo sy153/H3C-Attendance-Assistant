@@ -1,0 +1,7397 @@
+// ==UserScript==
+// @name         H3C 考勤工时助手
+// @namespace    local.h3c.attendance
+// @version      4.4.2
+// @description  H3C 考勤工时差、周末加班、假期识别、日历着色、主题、趋势和补时建议
+// @icon         data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%3Cstop%20stop-color%3D%22%232563eb%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%238b5cf6%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22url%28%23g%29%22%2F%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2232%22%20r%3D%2220%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%225%22%2F%3E%3Cpath%20d%3D%22M32%2019v14l10%206%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2232%22%20r%3D%223%22%20fill%3D%22white%22%2F%3E%3C%2Fsvg%3E
+// @match        https://eip-cw.h3c.com/myCenter/kaoqin*
+// @match        https://eip.h3c.com/myCenter/kaoqin*
+// @run-at       document-idle
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_addStyle
+// @noframes
+// ==/UserScript==
+
+(function () {
+  "use strict";
+
+  // ============================================================
+  // 配置
+  // ============================================================
+
+  const CONFIG = {
+    targetPath: "/myCenter/kaoqin",
+
+    excludeToday: true,
+
+    refreshDelay: 320,
+    historyStableDelay: 700,
+    dragThreshold: 3,
+
+    panelId: "h3c-attendance-helper",
+    styleId: "h3c-attendance-helper-style-v441",
+
+    positionKey:
+      "h3c-attendance-helper-position-v10",
+
+    displayModeKey:
+      "h3c-attendance-helper-display-mode-v10",
+
+    settingsKey:
+      "h3c-attendance-helper-settings-v10",
+
+    historyKey:
+      "h3c-attendance-helper-history-v10",
+
+    cellSelectors: [
+      "td.ant-fullcalendar-cell[title]",
+      "td.ant-picker-cell[title]",
+      ".ant-picker-cell[title]"
+    ],
+
+    calendarSelectors: [
+      ".ant-fullcalendar",
+      ".ant-picker-calendar",
+      ".ant-fullcalendar-calendar-body",
+      ".ant-picker-calendar-date-content"
+    ],
+
+    timeSelectors: [
+      "span.absolute.top-2.right-7.h-6.leading-6",
+      "[class*='leading-6'][class*='right-7']"
+    ]
+  };
+
+  const DEFAULT_SETTINGS = {
+    normalStart: "08:30",
+    normalEnd: "18:00",
+    flexibleLatest: "09:30",
+
+    lunchStart: "12:00",
+    lunchEnd: "13:30",
+
+    calendarColorEnabled: true,
+
+    theme: "minimal",
+    trendMonths: 6,
+
+    panelWidth: 450,
+    compactWidth: 325,
+    panelOpacity: 98
+  };
+
+  const TIME_KEYS = [
+    "normalStart",
+    "normalEnd",
+    "flexibleLatest",
+    "lunchStart",
+    "lunchEnd"
+  ];
+
+  const THEMES = [
+    ["system", "跟随系统"],
+    ["minimal", "白底极简"],
+    ["dark", "深色科技"],
+    ["oled", "OLED 纯黑"],
+    ["ocean", "海洋蓝"],
+    ["forest", "森林绿"],
+    ["warm", "暖阳米黄"],
+    ["sakura", "樱花粉"]
+  ];
+
+  const DISPLAY_MODES = [
+    "normal",
+    "compact",
+    "mini"
+  ];
+
+  const SPECIAL_DAY_RULES = [
+    {
+      type: "annualLeave",
+      label: "年休假",
+      mode: "leave",
+      pattern: /年休假|年假/
+    },
+    {
+      type: "compensatoryLeave",
+      label: "调休假",
+      mode: "leave",
+      pattern: /调休假|换休|补休/
+    },
+    {
+      type: "sickLeave",
+      label: "病假",
+      mode: "leave",
+      pattern: /病假/
+    },
+    {
+      type: "personalLeave",
+      label: "事假",
+      mode: "leave",
+      pattern: /事假/
+    },
+    {
+      type: "marriageLeave",
+      label: "婚假",
+      mode: "leave",
+      pattern: /婚假/
+    },
+    {
+      type: "maternityLeave",
+      label: "产假",
+      mode: "leave",
+      pattern: /产假|哺乳假|孕检假|产检假/
+    },
+    {
+      type: "paternityLeave",
+      label: "陪产假",
+      mode: "leave",
+      pattern: /陪产假|护理假/
+    },
+    {
+      type: "bereavementLeave",
+      label: "丧假",
+      mode: "leave",
+      pattern: /丧假/
+    },
+    {
+      type: "businessTrip",
+      label: "出差",
+      mode: "official",
+      pattern: /出差/
+    },
+    {
+      type: "outing",
+      label: "外出",
+      mode: "official",
+      pattern: /外出/
+    },
+    {
+      type: "training",
+      label: "培训",
+      mode: "official",
+      pattern: /培训/
+    },
+    {
+      type: "homeOffice",
+      label: "居家办公",
+      mode: "official",
+      pattern: /居家办公|远程办公/
+    }
+  ];
+
+  // ============================================================
+  // 油猴存储
+  // ============================================================
+
+  const STORAGE_MISSING =
+    "__H3C_ATTENDANCE_STORAGE_MISSING__";
+
+  function readStorage(key, fallback) {
+    try {
+      const value =
+        GM_getValue(
+          key,
+          STORAGE_MISSING
+        );
+
+      return value === STORAGE_MISSING
+        ? fallback
+        : value;
+    } catch (error) {
+      console.warn(
+        "[H3C 考勤助手] 读取油猴存储失败：",
+        error
+      );
+
+      return fallback;
+    }
+  }
+
+  function writeStorage(key, value) {
+    try {
+      GM_setValue(key, value);
+      return true;
+    } catch (error) {
+      console.warn(
+        "[H3C 考勤助手] 保存油猴存储失败：",
+        error
+      );
+
+      return false;
+    }
+  }
+
+  function deleteStorage(key) {
+    try {
+      GM_deleteValue(key);
+      return true;
+    } catch (error) {
+      console.warn(
+        "[H3C 考勤助手] 删除油猴存储失败：",
+        error
+      );
+
+      return false;
+    }
+  }
+
+  function clamp(
+    value,
+    minimum,
+    maximum,
+    fallback
+  ) {
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+      return fallback;
+    }
+
+    return Math.min(
+      maximum,
+      Math.max(minimum, number)
+    );
+  }
+
+  function loadSettings() {
+    const stored =
+      readStorage(
+        CONFIG.settingsKey,
+        {}
+      );
+
+    const settings = {
+      ...DEFAULT_SETTINGS,
+
+      ...(
+        stored &&
+        typeof stored === "object"
+          ? stored
+          : {}
+      )
+    };
+
+    if (
+      !THEMES.some(
+        ([value]) =>
+          value === settings.theme
+      )
+    ) {
+      settings.theme =
+        DEFAULT_SETTINGS.theme;
+    }
+
+    settings.trendMonths =
+      Number(settings.trendMonths) === 12
+        ? 12
+        : 6;
+
+    settings.panelWidth =
+      clamp(
+        settings.panelWidth,
+        380,
+        700,
+        DEFAULT_SETTINGS.panelWidth
+      );
+
+    settings.compactWidth =
+      clamp(
+        settings.compactWidth,
+        280,
+        450,
+        DEFAULT_SETTINGS.compactWidth
+      );
+
+    settings.panelOpacity =
+      clamp(
+        settings.panelOpacity,
+        60,
+        100,
+        DEFAULT_SETTINGS.panelOpacity
+      );
+
+    settings.calendarColorEnabled =
+      settings.calendarColorEnabled !== false;
+
+    return settings;
+  }
+
+  function loadHistory() {
+    const stored =
+      readStorage(
+        CONFIG.historyKey,
+        {}
+      );
+
+    if (
+      !stored ||
+      typeof stored !== "object"
+    ) {
+      return {};
+    }
+
+    const history = {};
+
+    for (
+      const [key, data]
+      of Object.entries(stored)
+    ) {
+      if (
+        !data ||
+        typeof data !== "object"
+      ) {
+        continue;
+      }
+
+      history[key] = {
+        ...data,
+
+        totalMinutes:
+          Number.isFinite(
+            data.weekdayMinutes
+          )
+            ? data.weekdayMinutes
+            : (
+              Number.isFinite(
+                data.totalMinutes
+              )
+                ? data.totalMinutes
+                : 0
+            )
+      };
+
+      delete history[key].forgotPunchDays;
+      delete history[key].forgotPunchRemaining;
+      delete history[key].forgotPunchExceeded;
+    }
+
+    return history;
+  }
+
+  function loadDisplayMode() {
+    const mode =
+      readStorage(
+        CONFIG.displayModeKey,
+        "normal"
+      );
+
+    return DISPLAY_MODES.includes(mode)
+      ? mode
+      : "normal";
+  }
+
+  // ============================================================
+  // 状态
+  // ============================================================
+
+  let styleInstalled = false;
+
+  const state = {
+    panel: null,
+
+    calendar: null,
+    calendarObserver: null,
+    discoveryObserver: null,
+    calendarClickHandler: null,
+
+    refreshTimer: null,
+    idleId: null,
+    stableTimer: null,
+
+    pendingHistoryToken: "",
+    lastSignature: "",
+
+    detailsOpen: false,
+    trendOpen: true,
+    legendOpen: false,
+
+    dragging: false,
+    settingsOpen: false,
+
+    settings:
+      loadSettings(),
+
+    history:
+      loadHistory(),
+
+    displayMode:
+      loadDisplayMode(),
+
+    latestResult: null,
+    latestSummary: null,
+    latestMonth: null,
+
+    cellCache: new Map()
+  };
+
+  // ============================================================
+  // SVG 图标
+  // ============================================================
+
+  const ICONS = {
+    clock: `
+      <circle
+        cx="12"
+        cy="12"
+        r="8"
+      ></circle>
+
+      <path d="M12 7.5V12L15.5 14"></path>
+    `,
+
+    settings: `
+      <circle
+        cx="12"
+        cy="12"
+        r="3"
+      ></circle>
+
+      <path
+        d="
+          M19.4 15
+          a1.7 1.7 0 0 0 .34 1.88
+          l.06.06
+          -2.83 2.83
+          -.06-.06
+          A1.7 1.7 0 0 0 15 19.4
+          a1.7 1.7 0 0 0-1 .6
+          1.7 1.7 0 0 0-.4 1.1
+          V21h-4v-.1
+          A1.7 1.7 0 0 0 8.5 19.4
+          a1.7 1.7 0 0 0-1.88.34
+          l-.06.06
+          -2.83-2.83
+          .06-.06
+          A1.7 1.7 0 0 0 4.1 15
+          a1.7 1.7 0 0 0-.6-1
+          1.7 1.7 0 0 0-1.1-.4
+          h-.1v-4h.1
+          A1.7 1.7 0 0 0 4.1 8.5
+          a1.7 1.7 0 0 0-.34-1.88
+          l-.06-.06
+          2.83-2.83
+          .06.06
+          A1.7 1.7 0 0 0 8.5 4.1
+          a1.7 1.7 0 0 0 1-.6
+          1.7 1.7 0 0 0 .4-1.1
+          v-.1h4v.1
+          A1.7 1.7 0 0 0 15 4.1
+          a1.7 1.7 0 0 0 1.88-.34
+          l.06-.06
+          2.83 2.83
+          -.06.06
+          A1.7 1.7 0 0 0 19.4 8.5
+          a1.7 1.7 0 0 0 .6 1
+          1.7 1.7 0 0 0 1.1.4
+          h.1v4h-.1
+          a1.7 1.7 0 0 0-1.7 1.1Z
+        "
+      ></path>
+    `,
+
+    refresh: `
+      <path d="M20 6v5h-5"></path>
+      <path d="M19.2 11A7.5 7.5 0 1 0 19 15"></path>
+    `,
+
+    compact: `
+      <rect
+        x="3.5"
+        y="4.5"
+        width="17"
+        height="15"
+        rx="2"
+      ></rect>
+
+      <path d="M3.5 9h17M9 9v10.5"></path>
+    `,
+
+    expand: `
+      <path d="M8.5 4H4v4.5M4 4l5 5"></path>
+      <path d="M15.5 4H20v4.5M20 4l-5 5"></path>
+      <path d="M8.5 20H4v-4.5M4 20l5-5"></path>
+      <path d="M15.5 20H20v-4.5M20 20l-5-5"></path>
+    `,
+
+    minimize: `
+      <path d="M6 12h12"></path>
+    `,
+
+    chevron: `
+      <path d="m9 5 7 7-7 7"></path>
+    `,
+
+    close: `
+      <path d="M6 6l12 12M18 6 6 18"></path>
+    `,
+
+    paint: `
+      <path
+        d="
+          m14.5 4
+          5.5 5.5
+          -9.2 9.2
+          a2.8 2.8 0 0 1-4 0
+          l-1.5-1.5
+          a2.8 2.8 0 0 1 0-4Z
+        "
+      ></path>
+
+      <path d="m12 6.5 5.5 5.5"></path>
+      <path d="M4 21c1.4 0 2.5-1.1 2.5-2.5"></path>
+    `
+  };
+
+  function icon(name) {
+    return `
+      <svg
+        class="h3c-svg"
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+      >
+        ${ICONS[name] || ""}
+      </svg>
+    `;
+  }
+
+  // ============================================================
+  // 通用工具
+  // ============================================================
+
+  function isTargetPage() {
+    return (
+      [
+        "eip-cw.h3c.com",
+        "eip.h3c.com"
+      ].includes(location.hostname) &&
+      location.pathname.startsWith(
+        CONFIG.targetPath
+      )
+    );
+  }
+
+  function pad2(value) {
+    return String(value).padStart(2, "0");
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function getCellSelector() {
+    return CONFIG.cellSelectors.join(",");
+  }
+
+  function getStatusSelector(status) {
+    return CONFIG.cellSelectors
+      .map(
+        selector =>
+          `${selector}[data-h3c-status="${status}"]`
+      )
+      .join(",");
+  }
+
+  function parseDate(value) {
+    const match =
+      String(value || "").match(
+        /(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})/
+      );
+
+    if (!match) {
+      return null;
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+
+    const date =
+      new Date(
+        year,
+        month - 1,
+        day
+      );
+
+    if (
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day
+    ) {
+      return null;
+    }
+
+    date.setHours(0, 0, 0, 0);
+
+    return date;
+  }
+
+  function getCellDate(cell) {
+    const title =
+      cell?.getAttribute?.("title") || "";
+
+    return parseDate(
+      title.split("｜")[0].trim()
+    );
+  }
+
+  function getDateKey(date) {
+    return [
+      date.getFullYear(),
+      pad2(date.getMonth() + 1),
+      pad2(date.getDate())
+    ].join("-");
+  }
+
+  function getMonthKey(year, month) {
+    return `${year}-${pad2(month)}`;
+  }
+
+  function isToday(date) {
+    const today = new Date();
+
+    return (
+      date.getFullYear() ===
+        today.getFullYear() &&
+      date.getMonth() ===
+        today.getMonth() &&
+      date.getDate() ===
+        today.getDate()
+    );
+  }
+
+  function isNaturalWeekend(date) {
+    return (
+      date.getDay() === 0 ||
+      date.getDay() === 6
+    );
+  }
+
+  function timeToMinutes(value) {
+    const match =
+      String(value || "").match(
+        /^(\d{1,2}):(\d{2})$/
+      );
+
+    if (!match) {
+      return null;
+    }
+
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+
+    if (
+      hour < 0 ||
+      hour > 23 ||
+      minute < 0 ||
+      minute > 59
+    ) {
+      return null;
+    }
+
+    return hour * 60 + minute;
+  }
+
+  function formatClock(minutes) {
+    if (!Number.isFinite(minutes)) {
+      return "--:--";
+    }
+
+    const dayMinutes = 24 * 60;
+    const nextDay = minutes >= dayMinutes;
+
+    const normalized =
+      (
+        minutes % dayMinutes +
+        dayMinutes
+      ) % dayMinutes;
+
+    const text =
+      `${pad2(
+        Math.floor(normalized / 60)
+      )}:${pad2(normalized % 60)}`;
+
+    return nextDay
+      ? `${text} 次日`
+      : text;
+  }
+
+  function formatHours(
+    minutes,
+    showPositiveSign = true
+  ) {
+    if (!Number.isFinite(minutes)) {
+      return "--";
+    }
+
+    const normalized =
+      Math.abs(minutes) < 0.5
+        ? 0
+        : minutes;
+
+    const sign =
+      showPositiveSign &&
+      normalized > 0
+        ? "+"
+        : "";
+
+    return (
+      `${sign}` +
+      `${(normalized / 60).toFixed(2)} 小时`
+    );
+  }
+
+  function formatCompact(minutes) {
+    if (!Number.isFinite(minutes)) {
+      return "--";
+    }
+
+    const normalized =
+      Math.abs(minutes) < 0.5
+        ? 0
+        : minutes;
+
+    const sign =
+      normalized > 0
+        ? "+"
+        : "";
+
+    return (
+      `${sign}` +
+      `${(normalized / 60).toFixed(2)}h`
+    );
+  }
+
+  function formatShort(minutes) {
+    if (!Number.isFinite(minutes)) {
+      return "--";
+    }
+
+    const rounded =
+      Math.round(minutes);
+
+    const sign =
+      rounded < 0
+        ? "-"
+        : "";
+
+    const absolute =
+      Math.abs(rounded);
+
+    const hours =
+      Math.floor(absolute / 60);
+
+    const remain =
+      absolute % 60;
+
+    if (!hours) {
+      return `${sign}${remain}分钟`;
+    }
+
+    if (!remain) {
+      return `${sign}${hours}小时`;
+    }
+
+    return (
+      `${sign}${hours}小时` +
+      `${remain}分钟`
+    );
+  }
+
+  function valueClass(minutes) {
+    if (minutes > 0) {
+      return "h3c-positive";
+    }
+
+    if (minutes < 0) {
+      return "h3c-negative";
+    }
+
+    return "h3c-zero";
+  }
+
+  // ============================================================
+  // 考勤规则
+  // ============================================================
+
+  function getRules() {
+    return {
+      normalStart:
+        timeToMinutes(
+          state.settings.normalStart
+        ),
+
+      normalEnd:
+        timeToMinutes(
+          state.settings.normalEnd
+        ),
+
+      flexibleLatest:
+        timeToMinutes(
+          state.settings.flexibleLatest
+        ),
+
+      lunchStart:
+        timeToMinutes(
+          state.settings.lunchStart
+        ),
+
+      lunchEnd:
+        timeToMinutes(
+          state.settings.lunchEnd
+        )
+    };
+  }
+
+  function overlap(
+    start1,
+    end1,
+    start2,
+    end2
+  ) {
+    if (
+      ![
+        start1,
+        end1,
+        start2,
+        end2
+      ].every(Number.isFinite)
+    ) {
+      return 0;
+    }
+
+    return Math.max(
+      0,
+      Math.min(end1, end2) -
+        Math.max(start1, start2)
+    );
+  }
+
+  function standardMinutes(rules) {
+    return (
+      rules.normalEnd -
+      rules.normalStart -
+      overlap(
+        rules.normalStart,
+        rules.normalEnd,
+        rules.lunchStart,
+        rules.lunchEnd
+      )
+    );
+  }
+
+  function expectedClockOut(
+    clockIn,
+    rules
+  ) {
+    if (!Number.isFinite(clockIn)) {
+      return null;
+    }
+
+    return (
+      rules.normalEnd +
+      Math.max(
+        0,
+        clockIn -
+          rules.normalStart
+      )
+    );
+  }
+
+  // ============================================================
+  // 日历读取
+  // ============================================================
+
+  function findCalendar() {
+    for (
+      const selector
+      of CONFIG.calendarSelectors
+    ) {
+      const element =
+        document.querySelector(selector);
+
+      if (
+        element?.querySelector(
+          getCellSelector()
+        )
+      ) {
+        return element;
+      }
+    }
+
+    const firstCell =
+      document.querySelector(
+        getCellSelector()
+      );
+
+    return (
+      firstCell?.closest(
+        ".ant-fullcalendar"
+      ) ||
+      firstCell?.closest(
+        ".ant-picker-calendar"
+      ) ||
+      firstCell?.closest("table") ||
+      null
+    );
+  }
+
+  function getCells() {
+    return Array.from(
+      (
+        state.calendar ||
+        document
+      ).querySelectorAll(
+        getCellSelector()
+      )
+    );
+  }
+
+  function isCurrentMonthCell(cell) {
+    const className =
+      String(cell.className || "");
+
+    return (
+      className.includes(
+        "ant-fullcalendar-in-month-cell"
+      ) ||
+      className.includes(
+        "ant-picker-cell-in-view"
+      )
+    );
+  }
+
+  function detectMonth(cells) {
+    const currentCells =
+      cells.filter(
+        isCurrentMonthCell
+      );
+
+    const source =
+      currentCells.length
+        ? currentCells
+        : cells;
+
+    const counts =
+      new Map();
+
+    for (const cell of source) {
+      const date =
+        getCellDate(cell);
+
+      if (!date) {
+        continue;
+      }
+
+      const key =
+        getMonthKey(
+          date.getFullYear(),
+          date.getMonth() + 1
+        );
+
+      counts.set(
+        key,
+        (counts.get(key) || 0) + 1
+      );
+    }
+
+    const best =
+      [...counts.entries()]
+        .sort(
+          (a, b) =>
+            b[1] - a[1]
+        )[0];
+
+    if (!best) {
+      return null;
+    }
+
+    const [year, month] =
+      best[0]
+        .split("-")
+        .map(Number);
+
+    return {
+      year,
+      month
+    };
+  }
+
+  function hasClassFragment(
+    element,
+    fragment
+  ) {
+    if (!element) {
+      return false;
+    }
+
+    if (
+      String(
+        element.className || ""
+      ).includes(fragment)
+    ) {
+      return true;
+    }
+
+    return Boolean(
+      element.querySelector(
+        `[class*="${fragment}"]`
+      )
+    );
+  }
+
+  function getDayInfo(date, cell) {
+    const text =
+      String(
+        cell.innerText ||
+        cell.textContent ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (
+      /调休上班|补班|正常上班/.test(text) ||
+      hasClassFragment(
+        cell,
+        "holiday1"
+      )
+    ) {
+      return {
+        type: "workday",
+        label: "工作日",
+        mode: "workday",
+        isWeekend: false,
+        isSpecial: false
+      };
+    }
+
+    for (
+      const rule
+      of SPECIAL_DAY_RULES
+    ) {
+      if (rule.pattern.test(text)) {
+        return {
+          type: rule.type,
+          label: rule.label,
+          mode: rule.mode,
+          isWeekend: false,
+          isSpecial: true
+        };
+      }
+    }
+
+    if (
+      hasClassFragment(
+        cell,
+        "holiday"
+      ) ||
+      isNaturalWeekend(date)
+    ) {
+      return {
+        type: "weekend",
+        label: "休息日",
+        mode: "weekend",
+        isWeekend: true,
+        isSpecial: false
+      };
+    }
+
+    return {
+      type: "workday",
+      label: "工作日",
+      mode: "workday",
+      isWeekend: false,
+      isSpecial: false
+    };
+  }
+
+  // ============================================================
+  // 打卡解析
+  // ============================================================
+
+  function parseTimeToken(value) {
+    const match =
+      String(value || "").match(
+        /(\d{1,2}):(\d{2})/
+      );
+
+    if (!match) {
+      return null;
+    }
+
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+
+    if (
+      hour < 0 ||
+      hour > 23 ||
+      minute < 0 ||
+      minute > 59
+    ) {
+      return null;
+    }
+
+    return hour * 60 + minute;
+  }
+
+  function parsePunchText(text) {
+    const source =
+      String(text || "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (!source) {
+      return null;
+    }
+
+    const range =
+      source.match(
+        /(\d{1,2}):(\d{2})\s*(?:-|~|～|至)\s*(\d{1,2}):(\d{2})/
+      );
+
+    if (range) {
+      const clockIn =
+        Number(range[1]) * 60 +
+        Number(range[2]);
+
+      let clockOut =
+        Number(range[3]) * 60 +
+        Number(range[4]);
+
+      if (
+        source.includes("次日") ||
+        clockOut < clockIn
+      ) {
+        clockOut += 24 * 60;
+      }
+
+      return {
+        clockIn,
+        clockOut,
+        hasMorning: true,
+        hasAfternoon: true
+      };
+    }
+
+    let clockIn = null;
+    let clockOut = null;
+
+    const morning =
+      source.match(
+        /(?:上午|上班|签到|上班卡|上班打卡)[^\d]{0,15}(\d{1,2}:\d{2})/
+      );
+
+    const afternoon =
+      source.match(
+        /(?:下午|下班|签退|下班卡|下班打卡)[^\d]{0,15}(\d{1,2}:\d{2})/
+      );
+
+    if (morning) {
+      clockIn =
+        parseTimeToken(
+          morning[1]
+        );
+    }
+
+    if (afternoon) {
+      clockOut =
+        parseTimeToken(
+          afternoon[1]
+        );
+    }
+
+    if (
+      clockIn === null &&
+      clockOut === null
+    ) {
+      const times =
+        (
+          source.match(
+            /\b\d{1,2}:\d{2}\b/g
+          ) || []
+        )
+          .map(parseTimeToken)
+          .filter(Number.isFinite);
+
+      if (times.length >= 2) {
+        clockIn = times[0];
+
+        clockOut =
+          times[times.length - 1];
+      } else if (times.length === 1) {
+        const onlyTime =
+          times[0];
+
+        if (
+          /下午|下班|签退/.test(source)
+        ) {
+          clockOut = onlyTime;
+        } else if (
+          /上午|上班|签到/.test(source)
+        ) {
+          clockIn = onlyTime;
+        } else if (
+          onlyTime < 12 * 60
+        ) {
+          clockIn = onlyTime;
+        } else {
+          clockOut = onlyTime;
+        }
+      }
+    }
+
+    if (
+      clockIn === null &&
+      clockOut === null
+    ) {
+      return null;
+    }
+
+    if (
+      clockIn !== null &&
+      clockOut !== null &&
+      (
+        source.includes("次日") ||
+        clockOut < clockIn
+      )
+    ) {
+      clockOut += 24 * 60;
+    }
+
+    return {
+      clockIn,
+      clockOut,
+
+      hasMorning:
+        clockIn !== null,
+
+      hasAfternoon:
+        clockOut !== null
+    };
+  }
+
+  function getPunch(cell) {
+    for (
+      const selector
+      of CONFIG.timeSelectors
+    ) {
+      const element =
+        cell.querySelector(selector);
+
+      if (!element) {
+        continue;
+      }
+
+      const result =
+        parsePunchText(
+          element.innerText ||
+          element.textContent
+        );
+
+      if (result) {
+        return result;
+      }
+    }
+
+    return parsePunchText(
+      cell.innerText ||
+      cell.textContent
+    );
+  }
+
+  // ============================================================
+  // 请假时间解析（新增）
+  // ============================================================
+
+  function parseLeaveTime(cell) {
+    const text =
+      String(
+        cell.innerText ||
+        cell.textContent ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    // 匹配形如“年休假（08:30-12:00）”或“事假（09:00-17:30）”
+    const match =
+      text.match(
+        /[（(](\d{1,2}:\d{2})\s*[-~至]\s*(\d{1,2}:\d{2})[)）]/
+      );
+
+    if (!match) {
+      return null;
+    }
+
+    const start = timeToMinutes(match[1]);
+    const end = timeToMinutes(match[2]);
+
+    if (start === null || end === null) {
+      return null;
+    }
+
+    // 处理跨天（基本不会出现，但保留逻辑）
+    const leaveStart = start;
+    const leaveEnd = end < start ? end + 24 * 60 : end;
+
+    return { start: leaveStart, end: leaveEnd };
+  }
+
+  // ============================================================
+  // 数据提取
+  // ============================================================
+
+  function cellFingerprint(
+    cell,
+    dateKey
+  ) {
+    const text =
+      String(
+        cell.innerText ||
+        cell.textContent ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    return [
+      dateKey,
+      cell.className || "",
+      text
+    ].join("|");
+  }
+
+  function parseCell(
+    cell,
+    date,
+    dateKey
+  ) {
+    const fingerprint =
+      cellFingerprint(
+        cell,
+        dateKey
+      );
+
+    const cached =
+      state.cellCache.get(dateKey);
+
+    if (
+      cached?.fingerprint ===
+      fingerprint
+    ) {
+      return cached.record
+        ? {
+            ...cached.record,
+            date: new Date(date)
+          }
+        : null;
+    }
+
+    const dayInfo =
+      getDayInfo(date, cell);
+
+    const punch =
+      getPunch(cell);
+
+    let record = null;
+
+    if (
+      dayInfo.isSpecial ||
+      punch
+    ) {
+      record = {
+        date: new Date(date),
+        dateKey,
+
+        dayType: dayInfo.type,
+        dayLabel: dayInfo.label,
+        dayMode: dayInfo.mode,
+
+        isSpecial:
+          dayInfo.isSpecial,
+
+        isWeekend:
+          dayInfo.isWeekend,
+
+        clockIn:
+          punch?.clockIn ?? null,
+
+        clockOut:
+          punch?.clockOut ?? null,
+
+        hasMorning:
+          punch?.hasMorning ?? false,
+
+        hasAfternoon:
+          punch?.hasAfternoon ?? false,
+
+        leaveStart: null,
+        leaveEnd: null
+      };
+
+      // 如果是请假类特殊天，尝试解析请假时间范围
+      if (
+        record.isSpecial &&
+        record.dayMode === "leave"
+      ) {
+        const leaveTime =
+          parseLeaveTime(cell);
+
+        if (leaveTime) {
+          record.leaveStart =
+            leaveTime.start;
+
+          record.leaveEnd =
+            leaveTime.end;
+        }
+      }
+    }
+
+    state.cellCache.set(
+      dateKey,
+      {
+        fingerprint,
+
+        record:
+          record
+            ? {
+                ...record,
+                date: null
+              }
+            : null
+      }
+    );
+
+    return record;
+  }
+
+  function extractRecords() {
+    const cells =
+      getCells();
+
+    const displayedMonth =
+      detectMonth(cells);
+
+    if (!displayedMonth) {
+      return {
+        displayedMonth: null,
+        records: [],
+        cells,
+        cellsByDate: new Map()
+      };
+    }
+
+    const monthPrefix =
+      getMonthKey(
+        displayedMonth.year,
+        displayedMonth.month
+      );
+
+    for (
+      const key
+      of state.cellCache.keys()
+    ) {
+      if (
+        !key.startsWith(
+          monthPrefix
+        )
+      ) {
+        state.cellCache.delete(key);
+      }
+    }
+
+    const records =
+      new Map();
+
+    const cellsByDate =
+      new Map();
+
+    for (const cell of cells) {
+      const date =
+        getCellDate(cell);
+
+      if (
+        !date ||
+        date.getFullYear() !==
+          displayedMonth.year ||
+        date.getMonth() + 1 !==
+          displayedMonth.month
+      ) {
+        continue;
+      }
+
+      const dateKey =
+        getDateKey(date);
+
+      cellsByDate.set(
+        dateKey,
+        cell
+      );
+
+      if (
+        CONFIG.excludeToday &&
+        isToday(date)
+      ) {
+        continue;
+      }
+
+      const record =
+        parseCell(
+          cell,
+          date,
+          dateKey
+        );
+
+      if (!record) {
+        continue;
+      }
+
+      const old =
+        records.get(dateKey);
+
+      const oldScore =
+        old
+          ? (
+            Number(old.hasMorning) +
+            Number(old.hasAfternoon) +
+            Number(old.isSpecial) * 2
+          )
+          : -1;
+
+      const newScore =
+        Number(record.hasMorning) +
+        Number(record.hasAfternoon) +
+        Number(record.isSpecial) * 2;
+
+      if (
+        !old ||
+        newScore > oldScore
+      ) {
+        records.set(
+          dateKey,
+          record
+        );
+      }
+    }
+
+    return {
+      displayedMonth,
+
+      records:
+        [...records.values()]
+          .sort(
+            (a, b) =>
+              a.date - b.date
+          ),
+
+      cells,
+      cellsByDate
+    };
+  }
+
+  // ============================================================
+  // 工时计算
+  // ============================================================
+
+  function getInvalidReasons(
+    record,
+    rules
+  ) {
+    // 如果不是特殊天，或特殊天但有请假时间，则需要检查打卡
+    if (record.isSpecial && !record.leaveStart) {
+      return [];
+    }
+
+    const reasons = [];
+
+    if (
+      record.clockIn === null &&
+      record.clockOut !== null
+    ) {
+      reasons.push(
+        "缺少上班时间"
+      );
+    }
+
+    if (
+      record.clockIn !== null &&
+      record.clockOut === null
+    ) {
+      reasons.push(
+        "缺少下班时间"
+      );
+    }
+
+    if (
+      !record.isWeekend &&
+      Number.isFinite(
+        record.clockIn
+      ) &&
+      Number.isFinite(
+        record.clockOut
+      )
+    ) {
+      if (
+        record.clockIn >
+        rules.flexibleLatest
+      ) {
+        reasons.push(
+          `上班晚于弹性最晚时间 ` +
+          formatClock(
+            rules.flexibleLatest
+          )
+        );
+      }
+
+      if (
+        record.clockOut <
+        rules.normalEnd
+      ) {
+        reasons.push(
+          `下班早于正常下班时间 ` +
+          formatClock(
+            rules.normalEnd
+          )
+        );
+      }
+    }
+
+    return reasons;
+  }
+
+  function calculateRecord(
+    record,
+    rules,
+    standard
+  ) {
+    // 特殊天且有请假时间：按部分出勤计算
+    if (record.isSpecial && record.leaveStart != null) {
+      const leaveSpan =
+        record.leaveEnd -
+        record.leaveStart;
+
+      const leaveLunch =
+        overlap(
+          record.leaveStart,
+          record.leaveEnd,
+          rules.lunchStart,
+          rules.lunchEnd
+        );
+
+      const leaveNet =
+        Math.max(
+          0,
+          leaveSpan - leaveLunch
+        );
+
+      const expectedNet =
+        standard - leaveNet;
+
+      // 打卡不完整 -> 缺勤
+      if (
+        !Number.isFinite(
+          record.clockIn
+        ) ||
+        !Number.isFinite(
+          record.clockOut
+        )
+      ) {
+        return {
+          overtimeMinutes:
+            -expectedNet,
+
+          actualNetMinutes: null,
+          lunchMinutes: null,
+          expectedClockOut: null,
+
+          isInvalid: true,
+
+          invalidReasons: [
+            "打卡时间不完整"
+          ]
+        };
+      }
+
+      const span =
+        Math.max(
+          0,
+          record.clockOut -
+            record.clockIn
+        );
+
+      if (span > 18 * 60) {
+        return {
+          overtimeMinutes: 0,
+          actualNetMinutes: null,
+          lunchMinutes: null,
+          expectedClockOut: null,
+
+          isInvalid: true,
+
+          invalidReasons: [
+            "打卡时间跨度超过18小时"
+          ]
+        };
+      }
+
+      const lunchMinutes =
+        overlap(
+          record.clockIn,
+          record.clockOut,
+          rules.lunchStart,
+          rules.lunchEnd
+        );
+
+      const actualNetMinutes =
+        Math.max(
+          0,
+          span - lunchMinutes
+        );
+
+      const overtime =
+        actualNetMinutes -
+        expectedNet;
+
+      return {
+        overtimeMinutes: overtime,
+        actualNetMinutes,
+        lunchMinutes,
+        expectedClockOut: null,
+
+        isInvalid: false,
+        invalidReasons: []
+      };
+    }
+
+    // 原来的特殊天豁免逻辑（无请假时间）
+    if (record.isSpecial) {
+      return {
+        overtimeMinutes: 0,
+        actualNetMinutes: standard,
+        lunchMinutes: 0,
+        expectedClockOut: null,
+
+        isInvalid: false,
+        invalidReasons: []
+      };
+    }
+
+    const invalidReasons =
+      getInvalidReasons(
+        record,
+        rules
+      );
+
+    if (invalidReasons.length) {
+      return {
+        overtimeMinutes: 0,
+        actualNetMinutes: null,
+        lunchMinutes: null,
+
+        expectedClockOut:
+          record.isWeekend
+            ? null
+            : expectedClockOut(
+                record.clockIn,
+                rules
+              ),
+
+        isInvalid: true,
+        invalidReasons
+      };
+    }
+
+    if (
+      !Number.isFinite(
+        record.clockIn
+      ) ||
+      !Number.isFinite(
+        record.clockOut
+      )
+    ) {
+      return {
+        overtimeMinutes: 0,
+        actualNetMinutes: null,
+        lunchMinutes: null,
+        expectedClockOut: null,
+
+        isInvalid: true,
+
+        invalidReasons: [
+          "打卡时间不完整"
+        ]
+      };
+    }
+
+    const span =
+      Math.max(
+        0,
+        record.clockOut -
+          record.clockIn
+      );
+
+    if (span > 18 * 60) {
+      return {
+        overtimeMinutes: 0,
+        actualNetMinutes: null,
+        lunchMinutes: null,
+        expectedClockOut: null,
+
+        isInvalid: true,
+
+        invalidReasons: [
+          "打卡时间跨度超过18小时"
+        ]
+      };
+    }
+
+    const lunchMinutes =
+      overlap(
+        record.clockIn,
+        record.clockOut,
+        rules.lunchStart,
+        rules.lunchEnd
+      );
+
+    const actualNetMinutes =
+      Math.max(
+        0,
+        span - lunchMinutes
+      );
+
+    return {
+      overtimeMinutes:
+        record.isWeekend
+          ? actualNetMinutes
+          : actualNetMinutes -
+            standard,
+
+      actualNetMinutes,
+      lunchMinutes,
+
+      expectedClockOut:
+        record.isWeekend
+          ? null
+          : expectedClockOut(
+              record.clockIn,
+              rules
+            ),
+
+      isInvalid: false,
+      invalidReasons: []
+    };
+  }
+
+  function summarize(records) {
+    const rules =
+      getRules();
+
+    const standard =
+      standardMinutes(rules);
+
+    const summary = {
+      totalMinutes: 0,
+      weekdayMinutes: 0,
+      weekendMinutes: 0,
+
+      weekdayDays: 0,
+      weekendDays: 0,
+
+      details: []
+    };
+
+    for (const record of records) {
+      const detail = {
+        ...record,
+
+        ...calculateRecord(
+          record,
+          rules,
+          standard
+        )
+      };
+
+      summary.details.push(detail);
+
+      // 出差/外出等 official 模式仍计为工作日
+      if (record.dayMode === "official") {
+        summary.weekdayDays += 1;
+      }
+      // 无请假时间的特殊天（完全豁免）不参与统计
+      else if (
+        record.isSpecial &&
+        !record.leaveStart
+      ) {
+        // 跳过
+      }
+      // 有请假时间的特殊天，视为工作日
+      else if (
+        record.isSpecial &&
+        record.leaveStart != null
+      ) {
+        summary.weekdayDays += 1;
+      }
+      // 普通工作日或周末
+      else {
+        if (record.isWeekend) {
+          summary.weekendDays += 1;
+        } else {
+          summary.weekdayDays += 1;
+        }
+      }
+
+      if (
+        detail.isInvalid ||
+        (
+          record.isSpecial &&
+          !record.leaveStart
+        )
+      ) {
+        continue;
+      }
+
+      if (record.isWeekend) {
+        summary.weekendMinutes +=
+          detail.overtimeMinutes;
+      } else {
+        summary.weekdayMinutes +=
+          detail.overtimeMinutes;
+
+        summary.totalMinutes +=
+          detail.overtimeMinutes;
+      }
+    }
+
+    return summary;
+  }
+
+  // ============================================================
+  // 剩余工作日
+  // ============================================================
+
+  function remainingWorkdays(
+    displayedMonth,
+    cells
+  ) {
+    const today =
+      new Date();
+
+    today.setHours(0, 0, 0, 0);
+
+    const monthStart =
+      new Date(
+        displayedMonth.year,
+        displayedMonth.month - 1,
+        1
+      );
+
+    const monthEnd =
+      new Date(
+        displayedMonth.year,
+        displayedMonth.month,
+        0
+      );
+
+    monthStart.setHours(0, 0, 0, 0);
+    monthEnd.setHours(0, 0, 0, 0);
+
+    const current =
+      displayedMonth.year ===
+        today.getFullYear() &&
+      displayedMonth.month ===
+        today.getMonth() + 1;
+
+    const future =
+      monthStart > today;
+
+    if (monthEnd <= today) {
+      return {
+        count: 0,
+        current: false,
+        future: false
+      };
+    }
+
+    const typeMap =
+      new Map();
+
+    for (const cell of cells) {
+      const date =
+        getCellDate(cell);
+
+      if (!date) {
+        continue;
+      }
+
+      typeMap.set(
+        getDateKey(date),
+        getDayInfo(date, cell)
+      );
+    }
+
+    const first =
+      current
+        ? new Date(
+            today.getFullYear(),
+            today.getMonth(),
+            today.getDate() + 1
+          )
+        : monthStart;
+
+    let count = 0;
+
+    for (
+      const date = new Date(first);
+      date <= monthEnd;
+      date.setDate(
+        date.getDate() + 1
+      )
+    ) {
+      const copy =
+        new Date(date);
+
+      const info =
+        typeMap.get(
+          getDateKey(copy)
+        );
+
+      if (info) {
+        if (
+          info.mode === "workday" ||
+          info.mode === "official"
+        ) {
+          count += 1;
+        }
+
+        continue;
+      }
+
+      if (!isNaturalWeekend(copy)) {
+        count += 1;
+      }
+    }
+
+    return {
+      count,
+      current,
+      future
+    };
+  }
+
+  // ============================================================
+  // 历史趋势
+  // ============================================================
+
+  function recordsToken(
+    month,
+    records
+  ) {
+    return JSON.stringify({
+      month:
+        getMonthKey(
+          month.year,
+          month.month
+        ),
+
+      records:
+        records.map(
+          record => [
+            record.dateKey,
+            record.clockIn,
+            record.clockOut,
+            record.dayType
+          ]
+        )
+    });
+  }
+
+  function saveHistory(
+    month,
+    summary,
+    recordCount
+  ) {
+    const key =
+      getMonthKey(
+        month.year,
+        month.month
+      );
+
+    const old =
+      state.history[key];
+
+    if (
+      old?.recordCount > 0 &&
+      recordCount === 0
+    ) {
+      return;
+    }
+
+    const next = {
+      year: month.year,
+      month: month.month,
+
+      totalMinutes:
+        summary.totalMinutes,
+
+      weekdayMinutes:
+        summary.weekdayMinutes,
+
+      weekendMinutes:
+        summary.weekendMinutes,
+
+      weekdayDays:
+        summary.weekdayDays,
+
+      weekendDays:
+        summary.weekendDays,
+
+      recordCount,
+      updatedAt: Date.now()
+    };
+
+    const oldComparable =
+      old
+        ? {
+            ...old,
+            updatedAt: 0
+          }
+        : null;
+
+    const nextComparable = {
+      ...next,
+      updatedAt: 0
+    };
+
+    if (
+      oldComparable &&
+      JSON.stringify(
+        oldComparable
+      ) ===
+        JSON.stringify(
+          nextComparable
+        )
+    ) {
+      return;
+    }
+
+    state.history[key] =
+      next;
+
+    const keys =
+      Object.keys(
+        state.history
+      ).sort();
+
+    while (keys.length > 36) {
+      delete state.history[
+        keys.shift()
+      ];
+    }
+
+    writeStorage(
+      CONFIG.historyKey,
+      state.history
+    );
+  }
+
+  function stageHistorySave(result) {
+    clearTimeout(
+      state.stableTimer
+    );
+
+    const token =
+      recordsToken(
+        result.displayedMonth,
+        result.records
+      );
+
+    state.pendingHistoryToken =
+      token;
+
+    state.stableTimer =
+      window.setTimeout(
+        () => {
+          state.stableTimer = null;
+
+          try {
+            const fresh =
+              extractRecords();
+
+            if (
+              !fresh.displayedMonth ||
+              !state.pendingHistoryToken
+            ) {
+              return;
+            }
+
+            const freshToken =
+              recordsToken(
+                fresh.displayedMonth,
+                fresh.records
+              );
+
+            if (
+              freshToken !==
+              state.pendingHistoryToken
+            ) {
+              return;
+            }
+
+            saveHistory(
+              fresh.displayedMonth,
+              summarize(
+                fresh.records
+              ),
+              fresh.records.length
+            );
+          } catch (error) {
+            console.debug(
+              "[H3C 考勤助手] 保存趋势失败：",
+              error
+            );
+          }
+        },
+        CONFIG.historyStableDelay
+      );
+  }
+
+  function getTrendData(
+    displayedMonth,
+    count
+  ) {
+    const base =
+      new Date(
+        displayedMonth.year,
+        displayedMonth.month - 1,
+        1
+      );
+
+    const result = [];
+
+    for (
+      let offset = count - 1;
+      offset >= 0;
+      offset -= 1
+    ) {
+      const date =
+        new Date(
+          base.getFullYear(),
+          base.getMonth() - offset,
+          1
+        );
+
+      const year =
+        date.getFullYear();
+
+      const month =
+        date.getMonth() + 1;
+
+      const key =
+        getMonthKey(
+          year,
+          month
+        );
+
+      const historyData =
+        state.history[key] || null;
+
+      result.push({
+        key,
+        year,
+        month,
+
+        data:
+          historyData
+            ? {
+                ...historyData,
+
+                totalMinutes:
+                  Number.isFinite(
+                    historyData.weekdayMinutes
+                  )
+                    ? historyData.weekdayMinutes
+                    : historyData.totalMinutes
+              }
+            : null
+      });
+    }
+
+    return result;
+  }
+
+  function renderTrend(
+    displayedMonth,
+    summary
+  ) {
+    const count =
+      state.settings.trendMonths === 12
+        ? 12
+        : 6;
+
+    const months =
+      getTrendData(
+        displayedMonth,
+        count
+      );
+
+    const currentKey =
+      getMonthKey(
+        displayedMonth.year,
+        displayedMonth.month
+      );
+
+    for (const item of months) {
+      if (item.key === currentKey) {
+        item.data = {
+          ...(item.data || {}),
+
+          totalMinutes:
+            summary.totalMinutes
+        };
+      }
+    }
+
+    const values =
+      months
+        .map(
+          item =>
+            item.data?.totalMinutes
+        )
+        .filter(Number.isFinite);
+
+    const maximum =
+      Math.max(
+        60,
+        ...values.map(Math.abs)
+      );
+
+    const width = 420;
+    const height = 180;
+    const baseline = 80;
+    const barMax = 55;
+    const padding = 12;
+
+    const slot =
+      (
+        width -
+        padding * 2
+      ) / count;
+
+    const barWidth =
+      count === 12
+        ? 16
+        : 27;
+
+    const svg = [
+      `
+        <line
+          x1="${padding}"
+          y1="${baseline}"
+          x2="${width - padding}"
+          y2="${baseline}"
+          class="h3c-chart-axis"
+        ></line>
+      `
+    ];
+
+    months.forEach(
+      (item, index) => {
+        const x =
+          padding +
+          slot * index +
+          slot / 2;
+
+        const value =
+          item.data?.totalMinutes;
+
+        if (Number.isFinite(value)) {
+          const barHeight =
+            Math.max(
+              2,
+              Math.abs(value) /
+                maximum *
+                barMax
+            );
+
+          const y =
+            value >= 0
+              ? baseline - barHeight
+              : baseline;
+
+          const color =
+            value > 0
+              ? "#10b981"
+              : value < 0
+                ? "#f43f5e"
+                : "#60a5fa";
+
+          const textY =
+            value >= 0
+              ? y - 6
+              : baseline +
+                barHeight +
+                12;
+
+          svg.push(`
+            <rect
+              x="${x - barWidth / 2}"
+              y="${y}"
+              width="${barWidth}"
+              height="${barHeight}"
+              rx="4"
+              fill="${color}"
+              fill-opacity=".84"
+            ></rect>
+
+            <text
+              x="${x}"
+              y="${textY}"
+              text-anchor="middle"
+              class="h3c-chart-value"
+              fill="${color}"
+            >
+              ${(value / 60).toFixed(1)}
+            </text>
+          `);
+        } else {
+          svg.push(`
+            <circle
+              cx="${x}"
+              cy="${baseline}"
+              r="2.5"
+              class="h3c-chart-empty"
+            ></circle>
+          `);
+        }
+
+        svg.push(`
+          <text
+            x="${x}"
+            y="164"
+            text-anchor="middle"
+            class="h3c-chart-label"
+          >
+            ${
+              count === 12
+                ? item.month
+                : `${item.month}月`
+            }
+          </text>
+        `);
+      }
+    );
+
+    return `
+      <details
+        class="h3c-trend-details"
+        ${state.trendOpen ? "open" : ""}
+      >
+        <summary>
+          最近 ${count} 个月工作日工时趋势
+        </summary>
+
+        <div class="h3c-trend-description">
+          趋势不包含周末加班，单位为小时。
+          圆点表示暂无缓存。
+        </div>
+
+        <svg
+          class="h3c-trend-chart"
+          viewBox="0 0 ${width} ${height}"
+          role="img"
+          aria-label="最近工作日工时趋势图"
+        >
+          ${svg.join("")}
+        </svg>
+      </details>
+    `;
+  }
+
+  // ============================================================
+  // 日历着色
+  // ============================================================
+
+  function clearColors(cells) {
+    for (const cell of cells) {
+      delete cell.dataset.h3cStatus;
+      delete cell.dataset.h3cTip;
+    }
+  }
+
+  function applyColors(
+    result,
+    summary
+  ) {
+    clearColors(result.cells);
+
+    if (
+      !state.settings
+        .calendarColorEnabled
+    ) {
+      return;
+    }
+
+    for (
+      const detail
+      of summary.details
+    ) {
+      const cell =
+        result.cellsByDate.get(
+          detail.dateKey
+        );
+
+      if (!cell) {
+        continue;
+      }
+
+      let status = "zero";
+      let tip = "工时持平";
+
+      // 有请假时间的特殊天，按普通工作日着色
+      if (
+        detail.isSpecial &&
+        detail.leaveStart != null
+      ) {
+        // 按实际工时差着色
+        if (detail.isInvalid) {
+          status = "invalid";
+          tip =
+            `打卡异常：` +
+            detail.invalidReasons.join("；");
+        } else if (detail.overtimeMinutes > 0) {
+          status = "positive";
+          tip =
+            `工时盈余 ` +
+            formatHours(
+              detail.overtimeMinutes
+            );
+        } else if (
+          detail.overtimeMinutes < 0
+        ) {
+          status = "negative";
+          tip =
+            `工时缺少 ` +
+            formatHours(
+              detail.overtimeMinutes,
+              false
+            );
+        } else {
+          status = "zero";
+          tip = "工时持平";
+        }
+      }
+      // 原有的特殊天颜色
+      else if (detail.isSpecial) {
+        status = "special";
+        tip =
+          `${detail.dayLabel}：` +
+          "工时豁免";
+      } else if (detail.isInvalid) {
+        status = "invalid";
+        tip =
+          `打卡异常：` +
+          detail.invalidReasons.join("；");
+      } else if (
+        detail.isWeekend &&
+        detail.overtimeMinutes > 0
+      ) {
+        status = "weekend";
+        tip =
+          `周末加班 ` +
+          formatHours(
+            detail.overtimeMinutes
+          );
+      } else if (
+        detail.overtimeMinutes > 0
+      ) {
+        status = "positive";
+        tip =
+          `工时盈余 ` +
+          formatHours(
+            detail.overtimeMinutes
+          );
+      } else if (
+        detail.overtimeMinutes < 0
+      ) {
+        status = "negative";
+        tip =
+          `工时缺少 ` +
+          formatHours(
+            detail.overtimeMinutes,
+            false
+          );
+      }
+
+      cell.dataset.h3cStatus =
+        status;
+
+      cell.dataset.h3cTip =
+        tip;
+    }
+  }
+
+  function updateColorButtons() {
+    if (!state.panel) {
+      return;
+    }
+
+    const enabled =
+      state.settings
+        .calendarColorEnabled;
+
+    state.panel
+      .querySelectorAll(
+        '[data-action="toggle-colors"]'
+      )
+      .forEach(button => {
+        button.classList.toggle(
+          "h3c-color-enabled",
+          enabled
+        );
+
+        button.title =
+          enabled
+            ? "隐藏日历着色"
+            : "显示日历着色";
+
+        button.setAttribute(
+          "aria-label",
+          button.title
+        );
+      });
+  }
+
+  function toggleCalendarColors() {
+    state.settings.calendarColorEnabled =
+      !state.settings
+        .calendarColorEnabled;
+
+    writeStorage(
+      CONFIG.settingsKey,
+      state.settings
+    );
+
+    updateColorButtons();
+
+    if (
+      state.latestResult &&
+      state.latestSummary
+    ) {
+      applyColors(
+        state.latestResult,
+        state.latestSummary
+      );
+    }
+
+    state.lastSignature = "";
+    scheduleRefresh(0);
+  }
+
+  function renderLegend() {
+    return `
+      <details
+        class="h3c-legend-details"
+        ${state.legendOpen ? "open" : ""}
+      >
+        <summary>
+          日历颜色图例
+
+          <span
+            class="
+              h3c-legend-state
+              ${
+                state.settings
+                  .calendarColorEnabled
+                  ? "h3c-positive"
+                  : ""
+              }
+            "
+          >
+            ${
+              state.settings
+                .calendarColorEnabled
+                ? "着色已开启"
+                : "着色已隐藏"
+            }
+          </span>
+        </summary>
+
+        <div class="h3c-legend-grid">
+          <div>
+            <i
+              class="
+                h3c-legend-dot
+                h3c-legend-positive
+              "
+            ></i>
+
+            <span>工作日工时盈余</span>
+          </div>
+
+          <div>
+            <i
+              class="
+                h3c-legend-dot
+                h3c-legend-negative
+              "
+            ></i>
+
+            <span>工作日工时不足</span>
+          </div>
+
+          <div>
+            <i
+              class="
+                h3c-legend-dot
+                h3c-legend-weekend
+              "
+            ></i>
+
+            <span>周末加班</span>
+          </div>
+
+          <div>
+            <i
+              class="
+                h3c-legend-dot
+                h3c-legend-invalid
+              "
+            ></i>
+
+            <span>打卡数据异常</span>
+          </div>
+
+          <div>
+            <i
+              class="
+                h3c-legend-dot
+                h3c-legend-special
+              "
+            ></i>
+
+            <span>假期或特殊考勤</span>
+          </div>
+
+          <div>
+            <i
+              class="
+                h3c-legend-dot
+                h3c-legend-zero
+              "
+            ></i>
+
+            <span>工时持平</span>
+          </div>
+        </div>
+
+        <div class="h3c-legend-note">
+          支持识别年休假、调休假、病假、事假、
+          婚假、产假、陪产假、丧假、出差、
+          外出、培训和居家办公。
+        </div>
+      </details>
+    `;
+  }
+
+  // ============================================================
+  // 页面内容渲染
+  // ============================================================
+
+  function renderSuggestion(
+    summary,
+    remaining
+  ) {
+    if (!remaining.current) {
+      return `
+        <div class="h3c-suggestion">
+          <strong>
+            ${
+              remaining.future
+                ? "未来月份"
+                : "历史月份"
+            }
+          </strong>
+
+          <span>
+            ${
+              remaining.future
+                ? `预计有 ${remaining.count} 个工作日。`
+                : "历史月份不计算剩余工作日。"
+            }
+          </span>
+        </div>
+      `;
+    }
+
+    if (remaining.count <= 0) {
+      return `
+        <div class="h3c-suggestion">
+          <strong>补时建议</strong>
+
+          <span>
+            本月已没有剩余工作日。
+          </span>
+        </div>
+      `;
+    }
+
+    if (summary.totalMinutes < 0) {
+      const deficit =
+        Math.abs(
+          summary.totalMinutes
+        );
+
+      const daily =
+        Math.ceil(
+          deficit /
+          remaining.count
+        );
+
+      return `
+        <div
+          class="
+            h3c-suggestion
+            h3c-suggestion-warning
+          "
+        >
+          <strong>
+            剩余工作日补时建议
+          </strong>
+
+          <span>
+            还有 ${remaining.count} 个工作日，
+            当前工作日缺时
+
+            <b class="h3c-negative">
+              ${escapeHtml(
+                formatShort(deficit)
+              )}
+            </b>，
+
+            平均每天建议补
+
+            <b>
+              ${escapeHtml(
+                formatShort(daily)
+              )}
+            </b>。
+          </span>
+        </div>
+      `;
+    }
+
+    const margin =
+      Math.floor(
+        summary.totalMinutes /
+        remaining.count
+      );
+
+    return `
+      <div
+        class="
+          h3c-suggestion
+          h3c-suggestion-success
+        "
+      >
+        <strong>
+          ${
+            summary.totalMinutes > 0
+              ? "工作日工时有盈余"
+              : "工作日工时正好持平"
+          }
+        </strong>
+
+        <span>
+          还有 ${remaining.count} 个工作日。
+
+          ${
+            summary.totalMinutes > 0
+              ? (
+                `平均每天余量约 ` +
+                `${escapeHtml(
+                  formatShort(margin)
+                )}。`
+              )
+              : "后续完成标准工时即可。"
+          }
+        </span>
+      </div>
+    `;
+  }
+
+  function actualPunchText(detail) {
+    if (
+      detail.clockIn === null &&
+      detail.clockOut === null
+    ) {
+      return detail.isSpecial
+        ? "特殊考勤，无需打卡"
+        : "无";
+    }
+
+    return (
+      `${
+        detail.clockIn === null
+          ? "无"
+          : formatClock(
+              detail.clockIn
+            )
+      } - ${
+        detail.clockOut === null
+          ? "无"
+          : formatClock(
+              detail.clockOut
+            )
+      }`
+    );
+  }
+
+  function renderDetails(details) {
+    return details
+      .map(detail => {
+        let resultText;
+        let resultClass;
+
+        if (detail.isSpecial && !detail.leaveStart) {
+          resultText = "工时豁免";
+          resultClass = "h3c-special-value";
+        } else if (detail.isInvalid) {
+          resultText = "未计入";
+          resultClass = "h3c-warning";
+        } else if (detail.isWeekend) {
+          resultText =
+            `周末加班 ` +
+            formatHours(
+              detail.overtimeMinutes
+            );
+          resultClass = "h3c-weekend-value";
+        } else {
+          resultText =
+            formatHours(
+              detail.overtimeMinutes
+            );
+          resultClass =
+            valueClass(
+              detail.overtimeMinutes
+            );
+        }
+
+        // 请假时间显示
+        const leaveInfo =
+          detail.leaveStart != null
+            ? `请假：${formatClock(detail.leaveStart)} - ${formatClock(detail.leaveEnd)}`
+            : "";
+
+        return `
+          <div
+            class="
+              h3c-detail-row
+              ${
+                detail.isInvalid
+                  ? "h3c-invalid-row"
+                  : ""
+              }
+              ${
+                detail.isSpecial && !detail.leaveStart
+                  ? "h3c-special-row"
+                  : ""
+              }
+            "
+          >
+            <div class="h3c-detail-main">
+              <strong>
+                ${escapeHtml(
+                  detail.dateKey.slice(5)
+                )}
+
+                ${escapeHtml(
+                  detail.dayLabel
+                )}
+
+                ${
+                  leaveInfo
+                    ? `<span class="h3c-detail-leave">${escapeHtml(leaveInfo)}</span>`
+                    : ""
+                }
+
+                ${
+                  detail.isInvalid
+                    ? `
+                      <span class="h3c-invalid-tag">
+                        打卡异常
+                      </span>
+                    `
+                    : ""
+                }
+
+                ${
+                  detail.isSpecial && !detail.leaveStart
+                    ? `
+                      <span class="h3c-special-tag">
+                        特殊考勤
+                      </span>
+                    `
+                    : ""
+                }
+              </strong>
+
+              <strong class="${resultClass}">
+                ${escapeHtml(resultText)}
+              </strong>
+            </div>
+
+            <div class="h3c-detail-sub">
+              <span>
+                实际：
+                ${escapeHtml(
+                  actualPunchText(detail)
+                )}
+              </span>
+
+              <span>
+                应下班：
+
+                ${
+                  detail.isSpecial && !detail.leaveStart
+                    ? "工时豁免"
+                    : detail.isWeekend
+                      ? "周末不设置"
+                      : escapeHtml(
+                          formatClock(
+                            detail.expectedClockOut
+                          )
+                        )
+                }
+              </span>
+
+              <span>
+                净工时：
+
+                ${
+                  detail.isInvalid
+                    ? "未计算"
+                    : detail.isSpecial && !detail.leaveStart
+                      ? "按标准工时处理"
+                      : escapeHtml(
+                          formatShort(
+                            detail.actualNetMinutes
+                          )
+                        )
+                }
+              </span>
+
+              <span>
+                午休扣除：
+
+                ${
+                  detail.isInvalid
+                    ? "未计算"
+                    : detail.isSpecial && !detail.leaveStart
+                      ? "无需计算"
+                      : escapeHtml(
+                          formatShort(
+                            detail.lunchMinutes
+                          )
+                        )
+                }
+              </span>
+
+              ${
+                detail.isInvalid
+                  ? `
+                    <span class="h3c-detail-reason">
+                      异常原因：
+                      ${escapeHtml(
+                        detail.invalidReasons.join("；")
+                      )}
+                    </span>
+                  `
+                  : ""
+              }
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  function rangeText(year, month) {
+    const today =
+      new Date();
+
+    if (
+      today.getFullYear() === year &&
+      today.getMonth() + 1 === month
+    ) {
+      const yesterday =
+        new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate() - 1
+        );
+
+      if (
+        yesterday.getFullYear() !== year ||
+        yesterday.getMonth() + 1 !== month
+      ) {
+        return (
+          `${year}年${month}月` +
+          "暂无可统计日期"
+        );
+      }
+
+      return (
+        `${year}年${month}月1日 - ` +
+        `${month}月` +
+        `${yesterday.getDate()}日（昨天）`
+      );
+    }
+
+    const lastDay =
+      new Date(
+        year,
+        month,
+        0
+      ).getDate();
+
+    return (
+      `${year}年${month}月1日 - ` +
+      `${month}月${lastDay}日`
+    );
+  }
+
+  function statCard(
+    label,
+    value,
+    className = ""
+  ) {
+    return `
+      <div class="h3c-card">
+        <div class="h3c-card-label">
+          ${label}
+        </div>
+
+        <div
+          class="
+            h3c-card-value
+            ${className}
+          "
+        >
+          ${value}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderFull(
+    result,
+    summary,
+    remaining
+  ) {
+    const {
+      year,
+      month
+    } = result.displayedMonth;
+
+    const rules =
+      getRules();
+
+    return `
+      <div class="h3c-range">
+        <strong>
+          ${year}年${month}月
+        </strong>
+
+        <br>
+
+        ${escapeHtml(
+          rangeText(year, month)
+        )}
+      </div>
+
+      <div class="h3c-summary">
+        <div>
+          本月工时差（不含周末加班）
+        </div>
+
+        <strong
+          class="${valueClass(
+            summary.totalMinutes
+          )}"
+        >
+          ${formatHours(
+            summary.totalMinutes
+          )}
+        </strong>
+      </div>
+
+      <div class="h3c-grid">
+        ${statCard(
+          "工作日工时差",
+          formatHours(
+            summary.weekdayMinutes
+          ),
+          valueClass(
+            summary.weekdayMinutes
+          )
+        )}
+
+        ${statCard(
+          "周末加班（单独统计）",
+          formatHours(
+            summary.weekendMinutes
+          ),
+          "h3c-weekend-value"
+        )}
+
+        ${statCard(
+          "工作日 / 周末",
+          `${summary.weekdayDays} / ` +
+          `${summary.weekendDays} 天`,
+          "h3c-weekend-value"
+        )}
+
+        ${statCard(
+          "剩余工作日（明日起）",
+          `${remaining.count} 天`
+        )}
+      </div>
+
+      ${renderSuggestion(
+        summary,
+        remaining
+      )}
+
+      ${renderLegend()}
+
+      <div class="h3c-rule">
+        正常班次：
+        ${escapeHtml(
+          state.settings.normalStart
+        )}
+        ～
+        ${escapeHtml(
+          state.settings.normalEnd
+        )}
+        <br>
+
+        弹性最晚：
+        ${escapeHtml(
+          state.settings.flexibleLatest
+        )}
+        <br>
+
+        午休：
+        ${escapeHtml(
+          state.settings.lunchStart
+        )}
+        ～
+        ${escapeHtml(
+          state.settings.lunchEnd
+        )}
+        <br>
+
+        标准净工时：
+        ${escapeHtml(
+          formatShort(
+            standardMinutes(rules)
+          )
+        )}
+        <br>
+
+        本月工时差只统计普通工作日；
+        周末加班单独展示。
+        假期、出差、培训等特殊考勤按工时豁免处理，
+        不产生工时差。
+      </div>
+
+      ${renderTrend(
+        result.displayedMonth,
+        summary
+      )}
+
+      <details
+        class="h3c-details"
+        ${state.detailsOpen ? "open" : ""}
+      >
+        <summary>
+          查看每日计算明细
+        </summary>
+
+        <div class="h3c-details-list">
+          ${renderDetails(
+            summary.details
+          )}
+        </div>
+      </details>
+    `;
+  }
+
+  // ============================================================
+  // 模式视图
+  // ============================================================
+
+  function updateModeViews() {
+    if (!state.panel) {
+      return;
+    }
+
+    const summary =
+      state.latestSummary;
+
+    const month =
+      state.latestMonth;
+
+    const miniLabel =
+      state.panel.querySelector(
+        ".h3c-mini-label"
+      );
+
+    const miniValue =
+      state.panel.querySelector(
+        ".h3c-mini-value"
+      );
+
+    const miniExtra =
+      state.panel.querySelector(
+        ".h3c-mini-extra"
+      );
+
+    const compactMonth =
+      state.panel.querySelector(
+        ".h3c-compact-month"
+      );
+
+    const compactValue =
+      state.panel.querySelector(
+        ".h3c-compact-value"
+      );
+
+    const compactDays =
+      state.panel.querySelector(
+        ".h3c-compact-days"
+      );
+
+    const compactWeekend =
+      state.panel.querySelector(
+        ".h3c-compact-weekend"
+      );
+
+    [
+      miniValue,
+      compactValue
+    ].forEach(element => {
+      element?.classList.remove(
+        "h3c-positive",
+        "h3c-negative",
+        "h3c-zero"
+      );
+    });
+
+    if (!summary || !month) {
+      miniLabel.textContent =
+        "本月工时差";
+
+      miniValue.textContent =
+        "读取中……";
+
+      miniExtra.textContent = "";
+
+      compactMonth.textContent =
+        "正在读取考勤数据……";
+
+      compactValue.textContent =
+        "--";
+
+      compactDays.textContent =
+        "-- / --";
+
+      compactWeekend.textContent =
+        "--";
+
+      return;
+    }
+
+    miniLabel.textContent =
+      `${month.year}年` +
+      `${month.month}月工时差`;
+
+    miniValue.textContent =
+      formatHours(
+        summary.totalMinutes
+      );
+
+    miniValue.classList.add(
+      valueClass(
+        summary.totalMinutes
+      )
+    );
+
+    miniExtra.textContent =
+      `周末加班 ${formatCompact(
+        summary.weekendMinutes
+      )}`;
+
+    compactMonth.textContent =
+      `${month.year}年${month.month}月` +
+      " · 工时差不含周末";
+
+    compactValue.textContent =
+      formatCompact(
+        summary.totalMinutes
+      );
+
+    compactValue.classList.add(
+      valueClass(
+        summary.totalMinutes
+      )
+    );
+
+    compactDays.textContent =
+      `${summary.weekdayDays} / ` +
+      `${summary.weekendDays} 天`;
+
+    compactWeekend.textContent =
+      formatCompact(
+        summary.weekendMinutes
+      );
+  }
+
+  // ============================================================
+  // 设置
+  // ============================================================
+
+  function themeOptions() {
+    return THEMES
+      .map(
+        ([value, label]) => `
+          <option value="${value}">
+            ${label}
+          </option>
+        `
+      )
+      .join("");
+  }
+
+  function timeSetting(
+    key,
+    label,
+    description
+  ) {
+    return `
+      <div class="h3c-setting-row">
+        <div>
+          <div class="h3c-setting-label">
+            ${label}
+          </div>
+
+          <small>
+            ${description || ""}
+          </small>
+        </div>
+
+        <input
+          type="time"
+          class="h3c-time-input"
+          data-setting="${key}"
+        >
+      </div>
+    `;
+  }
+
+  function rangeSetting(
+    key,
+    label,
+    description,
+    minimum,
+    maximum,
+    step,
+    unit
+  ) {
+    return `
+      <div class="h3c-setting-range-row">
+        <div class="h3c-setting-range-title">
+          <div>
+            <div class="h3c-setting-label">
+              ${label}
+            </div>
+
+            <small>
+              ${description}
+            </small>
+          </div>
+
+          <output
+            class="h3c-range-output"
+            data-output="${key}"
+          >
+            --
+          </output>
+        </div>
+
+        <input
+          type="range"
+          class="h3c-range-input"
+          data-range="${key}"
+          data-unit="${unit}"
+          min="${minimum}"
+          max="${maximum}"
+          step="${step}"
+        >
+      </div>
+    `;
+  }
+
+  function getFormSettings() {
+    const values = {};
+
+    for (const key of TIME_KEYS) {
+      values[key] =
+        state.panel.querySelector(
+          `[data-setting="${key}"]`
+        ).value;
+    }
+
+    values.theme =
+      state.panel.querySelector(
+        '[data-select="theme"]'
+      ).value;
+
+    values.trendMonths =
+      Number(
+        state.panel.querySelector(
+          '[data-select="trendMonths"]'
+        ).value
+      );
+
+    values.calendarColorEnabled =
+      state.panel.querySelector(
+        '[data-checkbox="calendarColorEnabled"]'
+      ).checked;
+
+    values.panelWidth =
+      Number(
+        state.panel.querySelector(
+          '[data-range="panelWidth"]'
+        ).value
+      );
+
+    values.compactWidth =
+      Number(
+        state.panel.querySelector(
+          '[data-range="compactWidth"]'
+        ).value
+      );
+
+    values.panelOpacity =
+      Number(
+        state.panel.querySelector(
+          '[data-range="panelOpacity"]'
+        ).value
+      );
+
+    return values;
+  }
+
+  function validateSettings(values) {
+    const parsed = {};
+
+    for (const key of TIME_KEYS) {
+      parsed[key] =
+        timeToMinutes(
+          values[key]
+        );
+    }
+
+    if (
+      Object.values(parsed).some(
+        value =>
+          value === null
+      )
+    ) {
+      return {
+        valid: false,
+        message:
+          "请完整填写所有时间。"
+      };
+    }
+
+    if (
+      parsed.normalEnd <=
+      parsed.normalStart
+    ) {
+      return {
+        valid: false,
+        message:
+          "正常下班时间必须晚于上班时间。"
+      };
+    }
+
+    if (
+      parsed.flexibleLatest <
+      parsed.normalStart
+    ) {
+      return {
+        valid: false,
+        message:
+          "弹性最晚时间不能早于正常上班时间。"
+      };
+    }
+
+    if (
+      parsed.lunchEnd <=
+      parsed.lunchStart
+    ) {
+      return {
+        valid: false,
+        message:
+          "午休结束时间必须晚于开始时间。"
+      };
+    }
+
+    if (
+      standardMinutes(parsed) <= 0
+    ) {
+      return {
+        valid: false,
+        message:
+          "标准净工时必须大于0。"
+      };
+    }
+
+    if (
+      values.panelWidth < 380 ||
+      values.panelWidth > 700
+    ) {
+      return {
+        valid: false,
+        message:
+          "完整模式宽度必须在380到700像素之间。"
+      };
+    }
+
+    if (
+      values.compactWidth < 280 ||
+      values.compactWidth > 450
+    ) {
+      return {
+        valid: false,
+        message:
+          "紧凑模式宽度必须在280到450像素之间。"
+      };
+    }
+
+    if (
+      values.panelOpacity < 60 ||
+      values.panelOpacity > 100
+    ) {
+      return {
+        valid: false,
+        message:
+          "面板透明度必须在60%到100%之间。"
+      };
+    }
+
+    return {
+      valid: true,
+      parsed
+    };
+  }
+
+  function updateRangeOutputs() {
+    if (!state.panel) {
+      return;
+    }
+
+    state.panel
+      .querySelectorAll(
+        "[data-range]"
+      )
+      .forEach(input => {
+        const key =
+          input.dataset.range;
+
+        const output =
+          state.panel.querySelector(
+            `[data-output="${key}"]`
+          );
+
+        if (!output) {
+          return;
+        }
+
+        output.textContent =
+          `${input.value}` +
+          `${input.dataset.unit || ""}`;
+      });
+  }
+
+  function applyAppearance(
+    settings = state.settings
+  ) {
+    if (!state.panel) {
+      return;
+    }
+
+    const panelWidth =
+      clamp(
+        settings.panelWidth,
+        380,
+        700,
+        DEFAULT_SETTINGS.panelWidth
+      );
+
+    const compactWidth =
+      clamp(
+        settings.compactWidth,
+        280,
+        450,
+        DEFAULT_SETTINGS.compactWidth
+      );
+
+    const opacity =
+      clamp(
+        settings.panelOpacity,
+        60,
+        100,
+        DEFAULT_SETTINGS.panelOpacity
+      );
+
+    state.panel.style.setProperty(
+      "--h3c-panel-width",
+      `${panelWidth}px`
+    );
+
+    state.panel.style.setProperty(
+      "--h3c-compact-width",
+      `${compactWidth}px`
+    );
+
+    state.panel.style.setProperty(
+      "--h3c-panel-opacity",
+      String(opacity / 100)
+    );
+  }
+
+  function applyTheme(
+    theme = state.settings.theme
+  ) {
+    if (state.panel) {
+      state.panel.dataset.theme =
+        theme;
+    }
+  }
+
+  function updateSettingsPreview() {
+    const values =
+      getFormSettings();
+
+    const validation =
+      validateSettings(values);
+
+    const preview =
+      state.panel.querySelector(
+        ".h3c-setting-preview"
+      );
+
+    updateRangeOutputs();
+
+    if (!validation.valid) {
+      preview.textContent =
+        validation.message;
+
+      return;
+    }
+
+    const themeLabel =
+      THEMES.find(
+        ([value]) =>
+          value === values.theme
+      )?.[1] || "未知";
+
+    preview.innerHTML = `
+      当前主题：
+      ${escapeHtml(themeLabel)}
+      <br>
+
+      面板尺寸：
+      ${values.panelWidth}px /
+      ${values.compactWidth}px
+      <br>
+
+      面板透明度：
+      ${values.panelOpacity}%
+      <br>
+
+      日历着色：
+      ${
+        values.calendarColorEnabled
+          ? "开启"
+          : "关闭"
+      }
+      <br>
+
+      标准净工时：
+      ${escapeHtml(
+        formatShort(
+          standardMinutes(
+            validation.parsed
+          )
+        )
+      )}
+    `;
+  }
+
+  function openSettings() {
+    setDisplayMode("normal");
+
+    for (const key of TIME_KEYS) {
+      state.panel.querySelector(
+        `[data-setting="${key}"]`
+      ).value =
+        state.settings[key];
+    }
+
+    state.panel.querySelector(
+      '[data-select="theme"]'
+    ).value =
+      state.settings.theme;
+
+    state.panel.querySelector(
+      '[data-select="trendMonths"]'
+    ).value =
+      String(
+        state.settings.trendMonths
+      );
+
+    state.panel.querySelector(
+      '[data-checkbox="calendarColorEnabled"]'
+    ).checked =
+      state.settings
+        .calendarColorEnabled;
+
+    state.panel.querySelector(
+      '[data-range="panelWidth"]'
+    ).value =
+      String(
+        state.settings.panelWidth
+      );
+
+    state.panel.querySelector(
+      '[data-range="compactWidth"]'
+    ).value =
+      String(
+        state.settings.compactWidth
+      );
+
+    state.panel.querySelector(
+      '[data-range="panelOpacity"]'
+    ).value =
+      String(
+        state.settings.panelOpacity
+      );
+
+    state.panel.querySelector(
+      ".h3c-setting-error"
+    ).textContent = "";
+
+    updateSettingsPreview();
+
+    state.settingsOpen = true;
+
+    /*
+     * 打开设置时添加专用状态类。
+     * 该类会解除面板 overflow 裁切，
+     * 使固定定位的设置弹窗覆盖整个视口。
+     */
+    state.panel.classList.add(
+      "h3c-settings-open"
+    );
+
+    const mask =
+      state.panel.querySelector(
+        ".h3c-settings-mask"
+      );
+
+    mask.classList.add(
+      "h3c-show"
+    );
+
+    /*
+     * 每次打开时回到弹窗顶部。
+     */
+    const dialog =
+      state.panel.querySelector(
+        ".h3c-settings-dialog"
+      );
+
+    if (dialog) {
+      dialog.scrollTop = 0;
+    }
+
+    mask.scrollTop = 0;
+
+    requestAnimationFrame(
+      () => {
+        dialog
+          ?.querySelector(
+            "select, input, button"
+          )
+          ?.focus({
+            preventScroll: true
+          });
+      }
+    );
+  }
+
+  function closeSettings() {
+    if (!state.panel) {
+      return;
+    }
+
+    state.settingsOpen = false;
+
+    applyTheme(
+      state.settings.theme
+    );
+
+    applyAppearance(
+      state.settings
+    );
+
+    state.panel
+      .querySelector(
+        ".h3c-settings-mask"
+      )
+      ?.classList.remove(
+        "h3c-show"
+      );
+
+    state.panel.classList.remove(
+      "h3c-settings-open"
+    );
+
+    requestAnimationFrame(
+      keepInsideViewport
+    );
+  }
+
+  function saveSettings() {
+    const values =
+      getFormSettings();
+
+    const validation =
+      validateSettings(values);
+
+    const errorElement =
+      state.panel.querySelector(
+        ".h3c-setting-error"
+      );
+
+    if (!validation.valid) {
+      errorElement.textContent =
+        validation.message;
+
+      return;
+    }
+
+    errorElement.textContent = "";
+
+    state.settings = {
+      ...values,
+
+      trendMonths:
+        Number(values.trendMonths),
+
+      panelWidth:
+        Number(values.panelWidth),
+
+      compactWidth:
+        Number(values.compactWidth),
+
+      panelOpacity:
+        Number(values.panelOpacity)
+    };
+
+    writeStorage(
+      CONFIG.settingsKey,
+      state.settings
+    );
+
+    applyTheme(
+      state.settings.theme
+    );
+
+    applyAppearance(
+      state.settings
+    );
+
+    updateColorButtons();
+    closeSettings();
+
+    state.cellCache.clear();
+    state.lastSignature = "";
+
+    scheduleRefresh(0);
+  }
+
+  function resetSettingsForm() {
+    for (const key of TIME_KEYS) {
+      state.panel.querySelector(
+        `[data-setting="${key}"]`
+      ).value =
+        DEFAULT_SETTINGS[key];
+    }
+
+    state.panel.querySelector(
+      '[data-select="theme"]'
+    ).value =
+      DEFAULT_SETTINGS.theme;
+
+    state.panel.querySelector(
+      '[data-select="trendMonths"]'
+    ).value =
+      String(
+        DEFAULT_SETTINGS.trendMonths
+      );
+
+    state.panel.querySelector(
+      '[data-checkbox="calendarColorEnabled"]'
+    ).checked =
+      DEFAULT_SETTINGS
+        .calendarColorEnabled;
+
+    state.panel.querySelector(
+      '[data-range="panelWidth"]'
+    ).value =
+      String(
+        DEFAULT_SETTINGS.panelWidth
+      );
+
+    state.panel.querySelector(
+      '[data-range="compactWidth"]'
+    ).value =
+      String(
+        DEFAULT_SETTINGS.compactWidth
+      );
+
+    state.panel.querySelector(
+      '[data-range="panelOpacity"]'
+    ).value =
+      String(
+        DEFAULT_SETTINGS.panelOpacity
+      );
+
+    applyTheme(
+      DEFAULT_SETTINGS.theme
+    );
+
+    applyAppearance(
+      DEFAULT_SETTINGS
+    );
+
+    updateSettingsPreview();
+  }
+
+  // ============================================================
+  // 面板创建
+  // ============================================================
+
+  function createPanel() {
+    if (state.panel?.isConnected) {
+      return state.panel;
+    }
+
+    installStyle();
+
+    document
+      .getElementById(
+        CONFIG.panelId
+      )
+      ?.remove();
+
+    const panel =
+      document.createElement("div");
+
+    panel.id =
+      CONFIG.panelId;
+
+    panel.innerHTML = `
+      <div
+        class="h3c-mini-view"
+        role="button"
+        tabindex="0"
+        title="单击进入紧凑模式，按住可拖动"
+      >
+        <div class="h3c-brand-icon">
+          ${icon("clock")}
+        </div>
+
+        <div class="h3c-mini-text">
+          <div class="h3c-mini-label">
+            本月工时差
+          </div>
+
+          <div class="h3c-mini-value">
+            读取中……
+          </div>
+
+          <div class="h3c-mini-extra"></div>
+        </div>
+
+        <div class="h3c-mini-chevron">
+          ${icon("chevron")}
+        </div>
+      </div>
+
+      <div class="h3c-compact-view">
+        <div class="h3c-compact-header">
+          <div class="h3c-title-wrap">
+            <div
+              class="
+                h3c-brand-icon
+                h3c-brand-small
+              "
+            >
+              ${icon("clock")}
+            </div>
+
+            <strong>
+              H3C 考勤助手
+            </strong>
+          </div>
+
+          <div class="h3c-actions">
+            <button
+              type="button"
+              class="h3c-icon-button"
+              data-action="toggle-colors"
+              title="隐藏日历着色"
+              aria-label="隐藏日历着色"
+            >
+              ${icon("paint")}
+            </button>
+
+            <button
+              type="button"
+              class="h3c-icon-button"
+              data-action="expand"
+              title="完整模式"
+              aria-label="切换到完整模式"
+            >
+              ${icon("expand")}
+            </button>
+
+            <button
+              type="button"
+              class="h3c-icon-button"
+              data-action="minimize"
+              title="最小化"
+              aria-label="最小化面板"
+            >
+              ${icon("minimize")}
+            </button>
+          </div>
+        </div>
+
+        <div class="h3c-compact-body">
+          <div class="h3c-compact-month">
+            正在读取考勤数据……
+          </div>
+
+          <div class="h3c-compact-main">
+            <span>工时差</span>
+
+            <strong class="h3c-compact-value">
+              --
+            </strong>
+          </div>
+
+          <div class="h3c-compact-grid">
+            <div>
+              <small>
+                工作日 / 周末
+              </small>
+
+              <strong class="h3c-compact-days">
+                -- / --
+              </strong>
+            </div>
+
+            <div>
+              <small>
+                周末加班
+              </small>
+
+              <strong class="h3c-compact-weekend">
+                --
+              </strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="h3c-normal-view">
+        <div class="h3c-header">
+          <div class="h3c-title-wrap">
+            <div class="h3c-brand-icon">
+              ${icon("clock")}
+            </div>
+
+            <strong>
+              H3C 考勤工时助手
+            </strong>
+          </div>
+
+          <div class="h3c-actions">
+            <button
+              type="button"
+              class="h3c-icon-button"
+              data-action="toggle-colors"
+              title="隐藏日历着色"
+              aria-label="隐藏日历着色"
+            >
+              ${icon("paint")}
+            </button>
+
+            <button
+              type="button"
+              class="h3c-icon-button"
+              data-action="settings"
+              title="设置"
+              aria-label="设置"
+            >
+              ${icon("settings")}
+            </button>
+
+            <button
+              type="button"
+              class="
+                h3c-icon-button
+                h3c-refresh-button
+              "
+              data-action="refresh"
+              title="刷新"
+              aria-label="刷新考勤数据"
+            >
+              ${icon("refresh")}
+            </button>
+
+            <button
+              type="button"
+              class="h3c-icon-button"
+              data-action="compact"
+              title="紧凑模式"
+              aria-label="切换到紧凑模式"
+            >
+              ${icon("compact")}
+            </button>
+
+            <button
+              type="button"
+              class="h3c-icon-button"
+              data-action="minimize"
+              title="最小化"
+              aria-label="最小化面板"
+            >
+              ${icon("minimize")}
+            </button>
+          </div>
+        </div>
+
+        <div class="h3c-content">
+          <div class="h3c-empty">
+            正在读取考勤数据……
+          </div>
+        </div>
+      </div>
+
+      <div
+        class="h3c-settings-mask"
+        role="dialog"
+        aria-modal="true"
+        aria-label="考勤助手设置"
+      >
+        <div class="h3c-settings-dialog">
+          <div class="h3c-settings-header">
+            <strong>
+              考勤助手设置
+            </strong>
+
+            <button
+              type="button"
+              class="h3c-icon-button"
+              data-action="cancel-settings"
+              title="关闭"
+              aria-label="关闭设置"
+            >
+              ${icon("close")}
+            </button>
+          </div>
+
+          <div class="h3c-setting-row">
+            <div>
+              <div class="h3c-setting-label">
+                面板主题
+              </div>
+
+              <small>
+                支持跟随系统和多种配色
+              </small>
+            </div>
+
+            <select
+              class="h3c-select"
+              data-select="theme"
+            >
+              ${themeOptions()}
+            </select>
+          </div>
+
+          <div class="h3c-setting-row">
+            <div>
+              <div class="h3c-setting-label">
+                趋势范围
+              </div>
+
+              <small>
+                趋势不包含周末加班
+              </small>
+            </div>
+
+            <select
+              class="h3c-select"
+              data-select="trendMonths"
+            >
+              <option value="6">
+                最近 6 个月
+              </option>
+
+              <option value="12">
+                最近 12 个月
+              </option>
+            </select>
+          </div>
+
+          ${rangeSetting(
+            "panelWidth",
+            "完整模式宽度",
+            "范围380～700像素",
+            380,
+            700,
+            10,
+            "px"
+          )}
+
+          ${rangeSetting(
+            "compactWidth",
+            "紧凑模式宽度",
+            "范围280～450像素",
+            280,
+            450,
+            5,
+            "px"
+          )}
+
+          ${rangeSetting(
+            "panelOpacity",
+            "面板透明度",
+            "范围60%～100%",
+            60,
+            100,
+            1,
+            "%"
+          )}
+
+          ${timeSetting(
+            "normalStart",
+            "正常上班时间",
+            "弹性顺延的基准时间"
+          )}
+
+          ${timeSetting(
+            "normalEnd",
+            "正常下班时间",
+            "早于该时间不参与工时计算"
+          )}
+
+          ${timeSetting(
+            "flexibleLatest",
+            "弹性最晚上班时间",
+            "晚于该时间不参与工时计算"
+          )}
+
+          ${timeSetting(
+            "lunchStart",
+            "午休开始时间",
+            "午休不计入有效工时"
+          )}
+
+          ${timeSetting(
+            "lunchEnd",
+            "午休结束时间",
+            ""
+          )}
+
+          <label class="h3c-checkbox-row">
+            <span>
+              开启日历单元格着色
+            </span>
+
+            <input
+              type="checkbox"
+              data-checkbox="calendarColorEnabled"
+            >
+          </label>
+
+          <div class="h3c-setting-preview"></div>
+          <div class="h3c-setting-error"></div>
+
+          <div class="h3c-setting-actions">
+            <button
+              type="button"
+              data-action="clear-history"
+            >
+              清除趋势
+            </button>
+
+            <div>
+              <button
+                type="button"
+                data-action="reset-settings"
+              >
+                默认
+              </button>
+
+              <button
+                type="button"
+                data-action="cancel-settings"
+              >
+                取消
+              </button>
+
+              <button
+                type="button"
+                class="h3c-primary-button"
+                data-action="save-settings"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(panel);
+
+    state.panel =
+      panel;
+
+    applyTheme();
+    applyAppearance();
+    applyDisplayMode();
+
+    bindPanelEvents();
+    enableDragging();
+    restorePosition();
+
+    updateModeViews();
+    updateColorButtons();
+
+    return panel;
+  }
+
+  // ============================================================
+  // 面板事件
+  // ============================================================
+
+  function bindPanelEvents() {
+    state.panel.addEventListener(
+      "click",
+      event => {
+        const actionElement =
+          event.target instanceof Element
+            ? event.target.closest(
+                "[data-action]"
+              )
+            : null;
+
+        if (!actionElement) {
+          return;
+        }
+
+        event.stopPropagation();
+
+        const action =
+          actionElement.dataset.action;
+
+        switch (action) {
+          case "refresh":
+            state.cellCache.clear();
+            state.lastSignature = "";
+
+            actionElement.classList.add(
+              "h3c-refreshing"
+            );
+
+            window.setTimeout(
+              () => {
+                actionElement.classList.remove(
+                  "h3c-refreshing"
+                );
+              },
+              500
+            );
+
+            scheduleRefresh(0);
+            break;
+
+          case "toggle-colors":
+            toggleCalendarColors();
+            break;
+
+          case "settings":
+            openSettings();
+            break;
+
+          case "compact":
+            setDisplayMode("compact");
+            break;
+
+          case "expand":
+            setDisplayMode("normal");
+            break;
+
+          case "minimize":
+            setDisplayMode("mini");
+            break;
+
+          case "cancel-settings":
+            closeSettings();
+            break;
+
+          case "save-settings":
+            saveSettings();
+            break;
+
+          case "reset-settings":
+            resetSettingsForm();
+            break;
+
+          case "clear-history":
+            if (
+              window.confirm(
+                "确定清除本地趋势数据吗？"
+              )
+            ) {
+              state.history = {};
+
+              deleteStorage(
+                CONFIG.historyKey
+              );
+
+              clearTimeout(
+                state.stableTimer
+              );
+
+              state.stableTimer = null;
+              state.pendingHistoryToken = "";
+              state.lastSignature = "";
+
+              closeSettings();
+              scheduleRefresh(0);
+            }
+            break;
+        }
+      }
+    );
+
+    state.panel
+      .querySelectorAll(
+        ".h3c-time-input, .h3c-select"
+      )
+      .forEach(element => {
+        const update = () => {
+          if (
+            element.dataset.select ===
+            "theme"
+          ) {
+            applyTheme(
+              element.value
+            );
+          }
+
+          updateSettingsPreview();
+        };
+
+        element.addEventListener(
+          "input",
+          update
+        );
+
+        element.addEventListener(
+          "change",
+          update
+        );
+      });
+
+    state.panel
+      .querySelectorAll(
+        ".h3c-range-input"
+      )
+      .forEach(element => {
+        element.addEventListener(
+          "input",
+          () => {
+            const values =
+              getFormSettings();
+
+            applyAppearance(values);
+            updateSettingsPreview();
+          }
+        );
+      });
+
+    state.panel
+      .querySelector(
+        '[data-checkbox="calendarColorEnabled"]'
+      )
+      .addEventListener(
+        "change",
+        updateSettingsPreview
+      );
+
+    const mask =
+      state.panel.querySelector(
+        ".h3c-settings-mask"
+      );
+
+    mask.addEventListener(
+      "pointerdown",
+      event => {
+        if (event.target === mask) {
+          closeSettings();
+        }
+      }
+    );
+
+    /*
+     * 防止设置弹窗中的滚轮事件传递给网页。
+     */
+    mask.addEventListener(
+      "wheel",
+      event => {
+        if (state.settingsOpen) {
+          event.stopPropagation();
+        }
+      },
+      {
+        passive: true
+      }
+    );
+
+    const mini =
+      state.panel.querySelector(
+        ".h3c-mini-view"
+      );
+
+    mini.addEventListener(
+      "keydown",
+      event => {
+        if (
+          event.key === "Enter" ||
+          event.key === " "
+        ) {
+          event.preventDefault();
+
+          setDisplayMode(
+            "compact"
+          );
+        }
+      }
+    );
+
+    /*
+     * Esc 关闭设置。
+     */
+    document.addEventListener(
+      "keydown",
+      event => {
+        if (
+          event.key === "Escape" &&
+          state.settingsOpen
+        ) {
+          event.preventDefault();
+          closeSettings();
+        }
+      }
+    );
+  }
+
+  // ============================================================
+  // 显示模式
+  // ============================================================
+
+  function setDisplayMode(mode) {
+    if (
+      !DISPLAY_MODES.includes(mode)
+    ) {
+      return;
+    }
+
+    state.displayMode =
+      mode;
+
+    writeStorage(
+      CONFIG.displayModeKey,
+      mode
+    );
+
+    applyDisplayMode();
+
+    requestAnimationFrame(
+      () => {
+        keepInsideViewport();
+        savePosition();
+      }
+    );
+  }
+
+  function applyDisplayMode() {
+    if (state.panel) {
+      state.panel.dataset.displayMode =
+        state.displayMode;
+    }
+  }
+
+  // ============================================================
+  // 主刷新
+  // ============================================================
+
+  function renderSignature(result) {
+    return JSON.stringify({
+      month:
+        result.displayedMonth,
+
+      settings:
+        state.settings,
+
+      records:
+        result.records.map(
+          record => [
+            record.dateKey,
+            record.clockIn,
+            record.clockOut,
+            record.dayType
+          ]
+        )
+    });
+  }
+
+  function refreshNow() {
+    if (!isTargetPage()) {
+      return;
+    }
+
+    const panel =
+      createPanel();
+
+    const content =
+      panel.querySelector(
+        ".h3c-content"
+      );
+
+    try {
+      attachCalendarObserver();
+
+      const result =
+        extractRecords();
+
+      if (!result.displayedMonth) {
+        state.latestResult = null;
+        state.latestSummary = null;
+        state.latestMonth = null;
+        state.lastSignature = "";
+
+        updateModeViews();
+
+        content.innerHTML = `
+          <div class="h3c-empty">
+            暂未找到考勤日历，
+            请等待页面加载完成。
+          </div>
+        `;
+
+        return;
+      }
+
+      const signature =
+        renderSignature(result);
+
+      if (
+        signature ===
+          state.lastSignature &&
+        state.latestSummary
+      ) {
+        state.latestResult =
+          result;
+
+        applyColors(
+          result,
+          state.latestSummary
+        );
+
+        return;
+      }
+
+      const summary =
+        summarize(
+          result.records
+        );
+
+      const remaining =
+        remainingWorkdays(
+          result.displayedMonth,
+          result.cells
+        );
+
+      state.lastSignature =
+        signature;
+
+      state.latestResult =
+        result;
+
+      state.latestSummary =
+        summary;
+
+      state.latestMonth =
+        result.displayedMonth;
+
+      stageHistorySave(result);
+
+      applyColors(
+        result,
+        summary
+      );
+
+      updateModeViews();
+      updateColorButtons();
+
+      content.innerHTML =
+        renderFull(
+          result,
+          summary,
+          remaining
+        );
+
+      bindDynamicEvents(content);
+    } catch (error) {
+      console.error(
+        "[H3C 考勤助手] 计算失败：",
+        error
+      );
+
+      state.lastSignature = "";
+
+      content.innerHTML = `
+        <div class="h3c-empty">
+          计算失败：
+          ${escapeHtml(
+            error.message
+          )}
+        </div>
+      `;
+    }
+  }
+
+  function bindDynamicEvents(content) {
+    const trend =
+      content.querySelector(
+        ".h3c-trend-details"
+      );
+
+    const details =
+      content.querySelector(
+        ".h3c-details"
+      );
+
+    const legend =
+      content.querySelector(
+        ".h3c-legend-details"
+      );
+
+    trend?.addEventListener(
+      "toggle",
+      () => {
+        state.trendOpen =
+          trend.open;
+      }
+    );
+
+    details?.addEventListener(
+      "toggle",
+      () => {
+        state.detailsOpen =
+          details.open;
+      }
+    );
+
+    legend?.addEventListener(
+      "toggle",
+      () => {
+        state.legendOpen =
+          legend.open;
+      }
+    );
+  }
+
+  // ============================================================
+  // 防抖刷新
+  // ============================================================
+
+  function cancelIdleTask() {
+    if (state.idleId === null) {
+      return;
+    }
+
+    if (
+      typeof cancelIdleCallback ===
+      "function"
+    ) {
+      cancelIdleCallback(
+        state.idleId
+      );
+    } else {
+      clearTimeout(
+        state.idleId
+      );
+    }
+
+    state.idleId = null;
+  }
+
+  function scheduleRefresh(
+    delay = CONFIG.refreshDelay
+  ) {
+    clearTimeout(
+      state.refreshTimer
+    );
+
+    cancelIdleTask();
+
+    state.refreshTimer =
+      window.setTimeout(
+        () => {
+          const run = () => {
+            state.idleId = null;
+            refreshNow();
+          };
+
+          if (
+            typeof requestIdleCallback ===
+            "function"
+          ) {
+            state.idleId =
+              requestIdleCallback(
+                run,
+                {
+                  timeout: 700
+                }
+              );
+          } else {
+            state.idleId =
+              window.setTimeout(
+                run,
+                0
+              );
+          }
+        },
+        delay
+      );
+  }
+
+  // ============================================================
+  // 日历监听
+  // ============================================================
+
+  function detachCalendarObserver() {
+    if (
+      state.calendar &&
+      state.calendarClickHandler
+    ) {
+      state.calendar.removeEventListener(
+        "click",
+        state.calendarClickHandler,
+        true
+      );
+    }
+
+    state.calendarObserver
+      ?.disconnect();
+
+    state.calendarObserver = null;
+    state.calendarClickHandler = null;
+    state.calendar = null;
+  }
+
+  function attachCalendarObserver() {
+    const calendar =
+      findCalendar();
+
+    if (!calendar) {
+      return;
+    }
+
+    if (
+      calendar === state.calendar &&
+      state.calendarObserver
+    ) {
+      return;
+    }
+
+    detachCalendarObserver();
+
+    state.calendar =
+      calendar;
+
+    state.calendarObserver =
+      new MutationObserver(
+        mutations => {
+          const relevant =
+            mutations.some(
+              mutation => {
+                if (
+                  mutation.type ===
+                    "childList" ||
+                  mutation.type ===
+                    "characterData"
+                ) {
+                  return true;
+                }
+
+                return (
+                  mutation.type ===
+                    "attributes" &&
+                  [
+                    "title",
+                    "class"
+                  ].includes(
+                    mutation.attributeName
+                  )
+                );
+              }
+            );
+
+          if (relevant) {
+            scheduleRefresh();
+          }
+        }
+      );
+
+    state.calendarObserver.observe(
+      calendar,
+      {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+
+        attributeFilter: [
+          "title",
+          "class"
+        ]
+      }
+    );
+
+    state.calendarClickHandler =
+      () => {
+        window.setTimeout(
+          () => {
+            state.cellCache.clear();
+            state.lastSignature = "";
+            scheduleRefresh(0);
+          },
+          120
+        );
+      };
+
+    calendar.addEventListener(
+      "click",
+      state.calendarClickHandler,
+      true
+    );
+  }
+
+  function installDiscoveryObserver() {
+    if (
+      state.discoveryObserver ||
+      !document.body
+    ) {
+      return;
+    }
+
+    state.discoveryObserver =
+      new MutationObserver(
+        () => {
+          if (!isTargetPage()) {
+            return;
+          }
+
+          if (
+            state.calendar?.isConnected
+          ) {
+            return;
+          }
+
+          detachCalendarObserver();
+          attachCalendarObserver();
+          scheduleRefresh();
+        }
+      );
+
+    state.discoveryObserver.observe(
+      document.body,
+      {
+        childList: true,
+        subtree: true
+      }
+    );
+  }
+
+  // ============================================================
+  // 拖动
+  // ============================================================
+
+  function enableDragging() {
+    bindDrag(
+      state.panel.querySelector(
+        ".h3c-header"
+      ),
+      true
+    );
+
+    bindDrag(
+      state.panel.querySelector(
+        ".h3c-compact-header"
+      ),
+      true
+    );
+
+    bindDrag(
+      state.panel.querySelector(
+        ".h3c-mini-view"
+      ),
+      false,
+      () => {
+        setDisplayMode("compact");
+      }
+    );
+  }
+
+  function bindDrag(
+    handle,
+    ignoreButtons,
+    clickAction
+  ) {
+    if (!handle) {
+      return;
+    }
+
+    let active = false;
+    let moved = false;
+    let pointerId = null;
+
+    let startX = 0;
+    let startY = 0;
+    let startLeft = 0;
+    let startTop = 0;
+
+    let panelWidth = 0;
+    let panelHeight = 0;
+
+    let deltaX = 0;
+    let deltaY = 0;
+
+    let frameId = null;
+
+    function boundedDelta() {
+      const maxLeft =
+        Math.max(
+          0,
+          window.innerWidth -
+            panelWidth
+        );
+
+      const maxTop =
+        Math.max(
+          0,
+          window.innerHeight -
+            Math.min(
+              panelHeight,
+              60
+            )
+        );
+
+      const left =
+        Math.min(
+          maxLeft,
+          Math.max(
+            0,
+            startLeft + deltaX
+          )
+        );
+
+      const top =
+        Math.min(
+          maxTop,
+          Math.max(
+            0,
+            startTop + deltaY
+          )
+        );
+
+      return {
+        x:
+          left - startLeft,
+
+        y:
+          top - startTop
+      };
+    }
+
+    function renderFrame() {
+      frameId = null;
+
+      if (!active) {
+        return;
+      }
+
+      const delta =
+        boundedDelta();
+
+      state.panel.style.transform =
+        `translate3d(` +
+        `${delta.x}px,` +
+        `${delta.y}px,0)`;
+    }
+
+    function onMove(event) {
+      if (
+        !active ||
+        event.pointerId !== pointerId
+      ) {
+        return;
+      }
+
+      deltaX =
+        event.clientX - startX;
+
+      deltaY =
+        event.clientY - startY;
+
+      if (
+        !moved &&
+        Math.hypot(
+          deltaX,
+          deltaY
+        ) >= CONFIG.dragThreshold
+      ) {
+        moved = true;
+      }
+
+      if (
+        moved &&
+        frameId === null
+      ) {
+        frameId =
+          requestAnimationFrame(
+            renderFrame
+          );
+      }
+
+      event.preventDefault();
+    }
+
+    function finish(
+      event,
+      cancelled
+    ) {
+      if (
+        !active ||
+        (
+          event &&
+          event.pointerId !== pointerId
+        )
+      ) {
+        return;
+      }
+
+      const wasMoved =
+        moved;
+
+      active = false;
+
+      if (frameId !== null) {
+        cancelAnimationFrame(
+          frameId
+        );
+
+        frameId = null;
+      }
+
+      if (
+        wasMoved &&
+        !cancelled
+      ) {
+        const delta =
+          boundedDelta();
+
+        state.panel.style.left =
+          `${startLeft + delta.x}px`;
+
+        state.panel.style.top =
+          `${startTop + delta.y}px`;
+
+        state.panel.style.right =
+          "auto";
+      }
+
+      state.panel.style.transform =
+        "";
+
+      state.panel.classList.remove(
+        "h3c-dragging"
+      );
+
+      handle.classList.remove(
+        "h3c-handle-dragging"
+      );
+
+      state.dragging = false;
+
+      window.removeEventListener(
+        "pointermove",
+        onMove,
+        true
+      );
+
+      window.removeEventListener(
+        "pointerup",
+        onUp,
+        true
+      );
+
+      window.removeEventListener(
+        "pointercancel",
+        onCancel,
+        true
+      );
+
+      if (
+        wasMoved &&
+        !cancelled
+      ) {
+        savePosition();
+      } else if (
+        !wasMoved &&
+        !cancelled &&
+        clickAction
+      ) {
+        clickAction();
+      }
+
+      moved = false;
+      pointerId = null;
+    }
+
+    function onUp(event) {
+      finish(event, false);
+    }
+
+    function onCancel(event) {
+      finish(event, true);
+    }
+
+    handle.addEventListener(
+      "pointerdown",
+      event => {
+        if (
+          state.settingsOpen ||
+          (
+            event.pointerType ===
+              "mouse" &&
+            event.button !== 0
+          )
+        ) {
+          return;
+        }
+
+        if (
+          ignoreButtons &&
+          event.target instanceof Element &&
+          event.target.closest("button")
+        ) {
+          return;
+        }
+
+        const rect =
+          state.panel
+            .getBoundingClientRect();
+
+        active = true;
+        moved = false;
+
+        pointerId =
+          event.pointerId;
+
+        startX =
+          event.clientX;
+
+        startY =
+          event.clientY;
+
+        startLeft =
+          rect.left;
+
+        startTop =
+          rect.top;
+
+        panelWidth =
+          rect.width;
+
+        panelHeight =
+          rect.height;
+
+        deltaX = 0;
+        deltaY = 0;
+
+        state.panel.style.left =
+          `${startLeft}px`;
+
+        state.panel.style.top =
+          `${startTop}px`;
+
+        state.panel.style.right =
+          "auto";
+
+        state.dragging = true;
+
+        state.panel.classList.add(
+          "h3c-dragging"
+        );
+
+        handle.classList.add(
+          "h3c-handle-dragging"
+        );
+
+        window.addEventListener(
+          "pointermove",
+          onMove,
+          {
+            capture: true,
+            passive: false
+          }
+        );
+
+        window.addEventListener(
+          "pointerup",
+          onUp,
+          true
+        );
+
+        window.addEventListener(
+          "pointercancel",
+          onCancel,
+          true
+        );
+
+        event.preventDefault();
+      }
+    );
+
+    if (clickAction) {
+      handle.addEventListener(
+        "click",
+        event => {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      );
+    }
+  }
+
+  // ============================================================
+  // 面板位置
+  // ============================================================
+
+  function savePosition() {
+    if (
+      !state.panel?.isConnected
+    ) {
+      return;
+    }
+
+    const rect =
+      state.panel
+        .getBoundingClientRect();
+
+    writeStorage(
+      CONFIG.positionKey,
+      {
+        left: rect.left,
+        top: rect.top
+      }
+    );
+  }
+
+  function restorePosition() {
+    const position =
+      readStorage(
+        CONFIG.positionKey,
+        null
+      );
+
+    if (
+      !position ||
+      !Number.isFinite(
+        position.left
+      ) ||
+      !Number.isFinite(
+        position.top
+      )
+    ) {
+      return;
+    }
+
+    state.panel.style.left =
+      `${Math.max(
+        0,
+        position.left
+      )}px`;
+
+    state.panel.style.top =
+      `${Math.max(
+        0,
+        position.top
+      )}px`;
+
+    state.panel.style.right =
+      "auto";
+
+    requestAnimationFrame(
+      keepInsideViewport
+    );
+  }
+
+  function keepInsideViewport() {
+    if (
+      !state.panel?.isConnected ||
+      state.dragging ||
+      state.settingsOpen
+    ) {
+      return;
+    }
+
+    const rect =
+      state.panel
+        .getBoundingClientRect();
+
+    const maxLeft =
+      Math.max(
+        0,
+        window.innerWidth -
+          state.panel.offsetWidth
+      );
+
+    const maxTop =
+      Math.max(
+        0,
+        window.innerHeight -
+          Math.min(
+            state.panel.offsetHeight,
+            60
+          )
+      );
+
+    state.panel.style.left =
+      `${Math.max(
+        0,
+        Math.min(
+          rect.left,
+          maxLeft
+        )
+      )}px`;
+
+    state.panel.style.top =
+      `${Math.max(
+        0,
+        Math.min(
+          rect.top,
+          maxTop
+        )
+      )}px`;
+
+    state.panel.style.right =
+      "auto";
+  }
+
+  // ============================================================
+  // 样式
+  // ============================================================
+
+  function installStyle() {
+    if (
+      styleInstalled ||
+      document.getElementById(
+        CONFIG.styleId
+      )
+    ) {
+      return;
+    }
+
+    document
+      .querySelectorAll(
+        '[id^="h3c-attendance-helper-style"]'
+      )
+      .forEach(
+        element =>
+          element.remove()
+      );
+
+    const css = `
+      #${CONFIG.panelId} {
+        --h3c-panel-width: 450px;
+        --h3c-compact-width: 325px;
+        --h3c-panel-opacity: .98;
+
+        --bg: rgba(255,255,255,.985);
+        --bg2: #f8fafc;
+        --bg3: #f1f5f9;
+        --card: #fff;
+
+        --text: #0f172a;
+        --text2: #475569;
+        --muted: #94a3b8;
+
+        --border: #e2e8f0;
+        --border2: #cbd5e1;
+
+        --primary: #2563eb;
+        --primarySoft: #eff6ff;
+        --primaryText: #1d4ed8;
+
+        --positive: #059669;
+        --negative: #e11d48;
+        --warning: #d97706;
+        --danger: #dc2626;
+        --weekend: #0284c7;
+        --special: #9333ea;
+
+        --mask: rgba(15,23,42,.46);
+
+        --header:
+          linear-gradient(
+            180deg,
+            #fff,
+            #f8fafc
+          );
+
+        --summary:
+          linear-gradient(
+            135deg,
+            #eff6ff,
+            #f5f3ff
+          );
+
+        --shadow:
+          0 18px 45px rgba(15,23,42,.15),
+          0 4px 14px rgba(15,23,42,.08);
+
+        position: fixed;
+        top: 90px;
+        right: 20px;
+
+        z-index: 2147483647;
+
+        width:
+          min(
+            var(--h3c-panel-width),
+            calc(100vw - 20px)
+          );
+
+        overflow: hidden;
+        opacity: var(--h3c-panel-opacity);
+
+        color: var(--text);
+
+        font-family:
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          "PingFang SC",
+          "Microsoft YaHei",
+          sans-serif;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 16px;
+
+        background: var(--bg);
+        box-shadow: var(--shadow);
+
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+
+        transition:
+          width .16s ease,
+          opacity .16s ease,
+          box-shadow .16s ease;
+      }
+
+      /*
+       * 设置弹窗打开时解除裁切。
+       *
+       * 同时暂时关闭面板自身的 backdrop-filter，
+       * 避免部分 Chromium 版本将 fixed 子元素
+       * 错误限制在面板的包含块中。
+       */
+      #${CONFIG.panelId}.h3c-settings-open {
+        overflow: visible !important;
+
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+
+      #${CONFIG.panelId}[data-theme="dark"] {
+        --bg: rgba(15,23,42,.985);
+        --bg2: #1e293b;
+        --bg3: #334155;
+        --card: rgba(30,41,59,.94);
+
+        --text: #f8fafc;
+        --text2: #cbd5e1;
+        --muted: #7d91ae;
+
+        --border: rgba(148,163,184,.2);
+        --border2: rgba(148,163,184,.38);
+
+        --primary: #60a5fa;
+        --primarySoft: rgba(37,99,235,.2);
+        --primaryText: #bfdbfe;
+
+        --positive: #6ee7b7;
+        --negative: #fda4af;
+        --warning: #fcd34d;
+        --danger: #fb7185;
+        --weekend: #7dd3fc;
+        --special: #d8b4fe;
+
+        --mask: rgba(2,6,23,.82);
+
+        --header:
+          linear-gradient(
+            90deg,
+            rgba(37,99,235,.18),
+            rgba(124,58,237,.15)
+          );
+
+        --summary:
+          linear-gradient(
+            135deg,
+            rgba(30,64,175,.3),
+            rgba(91,33,182,.25)
+          );
+
+        --shadow:
+          0 24px 65px rgba(2,6,23,.52);
+      }
+
+      #${CONFIG.panelId}[data-theme="oled"] {
+        --bg: rgba(0,0,0,.99);
+        --bg2: #090909;
+        --bg3: #161616;
+        --card: #090909;
+
+        --text: #fff;
+        --text2: #d4d4d8;
+        --muted: #71717a;
+
+        --border: #27272a;
+        --border2: #52525b;
+
+        --primary: #a78bfa;
+        --primarySoft: #201737;
+        --primaryText: #ddd6fe;
+
+        --positive: #34d399;
+        --negative: #fb7185;
+        --warning: #fbbf24;
+        --danger: #f87171;
+        --weekend: #38bdf8;
+        --special: #c084fc;
+
+        --mask: rgba(0,0,0,.9);
+
+        --header:
+          linear-gradient(
+            180deg,
+            #0a0a0a,
+            #000
+          );
+
+        --summary:
+          linear-gradient(
+            135deg,
+            #111827,
+            #1e1b4b
+          );
+
+        --shadow:
+          0 24px 65px rgba(0,0,0,.75);
+      }
+
+      #${CONFIG.panelId}[data-theme="ocean"] {
+        --bg: rgba(240,249,255,.985);
+        --bg2: #e0f2fe;
+        --bg3: #bae6fd;
+        --card: rgba(255,255,255,.94);
+
+        --text: #0c4a6e;
+        --text2: #0369a1;
+        --muted: #6fa2c0;
+
+        --border: #bae6fd;
+        --border2: #7dd3fc;
+
+        --primary: #0284c7;
+        --primarySoft: #e0f2fe;
+        --primaryText: #0369a1;
+
+        --header:
+          linear-gradient(
+            135deg,
+            #f0f9ff,
+            #e0f2fe
+          );
+
+        --summary:
+          linear-gradient(
+            135deg,
+            #e0f2fe,
+            #cffafe
+          );
+      }
+
+      #${CONFIG.panelId}[data-theme="forest"] {
+        --bg: rgba(247,254,231,.985);
+        --bg2: #ecfccb;
+        --bg3: #d9f99d;
+        --card: rgba(255,255,255,.94);
+
+        --text: #14532d;
+        --text2: #3f6212;
+        --muted: #7b9b60;
+
+        --border: #d9f99d;
+        --border2: #a3e635;
+
+        --primary: #16a34a;
+        --primarySoft: #dcfce7;
+        --primaryText: #15803d;
+
+        --header:
+          linear-gradient(
+            135deg,
+            #f7fee7,
+            #ecfccb
+          );
+
+        --summary:
+          linear-gradient(
+            135deg,
+            #dcfce7,
+            #ecfccb
+          );
+      }
+
+      #${CONFIG.panelId}[data-theme="warm"] {
+        --bg: rgba(255,251,235,.985);
+        --bg2: #fef3c7;
+        --bg3: #fde68a;
+        --card: rgba(255,255,255,.94);
+
+        --text: #78350f;
+        --text2: #92400e;
+        --muted: #bd8b55;
+
+        --border: #fde68a;
+        --border2: #fcd34d;
+
+        --primary: #d97706;
+        --primarySoft: #fef3c7;
+        --primaryText: #b45309;
+
+        --header:
+          linear-gradient(
+            135deg,
+            #fffbeb,
+            #fef3c7
+          );
+
+        --summary:
+          linear-gradient(
+            135deg,
+            #fef3c7,
+            #ffedd5
+          );
+      }
+
+      #${CONFIG.panelId}[data-theme="sakura"] {
+        --bg: rgba(255,247,250,.985);
+        --bg2: #fce7f3;
+        --bg3: #fbcfe8;
+        --card: rgba(255,255,255,.94);
+
+        --text: #831843;
+        --text2: #9d174d;
+        --muted: #c47c9e;
+
+        --border: #fbcfe8;
+        --border2: #f9a8d4;
+
+        --primary: #db2777;
+        --primarySoft: #fce7f3;
+        --primaryText: #be185d;
+
+        --header:
+          linear-gradient(
+            135deg,
+            #fff7fa,
+            #fce7f3
+          );
+
+        --summary:
+          linear-gradient(
+            135deg,
+            #fce7f3,
+            #f5f3ff
+          );
+      }
+
+      @media (prefers-color-scheme: dark) {
+        #${CONFIG.panelId}[data-theme="system"] {
+          --bg: rgba(15,23,42,.985);
+          --bg2: #1e293b;
+          --bg3: #334155;
+          --card: rgba(30,41,59,.94);
+
+          --text: #f8fafc;
+          --text2: #cbd5e1;
+          --muted: #7d91ae;
+
+          --border: rgba(148,163,184,.2);
+          --border2: rgba(148,163,184,.38);
+
+          --primary: #60a5fa;
+          --primarySoft: rgba(37,99,235,.2);
+          --primaryText: #bfdbfe;
+
+          --positive: #6ee7b7;
+          --negative: #fda4af;
+          --warning: #fcd34d;
+          --danger: #fb7185;
+          --weekend: #7dd3fc;
+          --special: #d8b4fe;
+
+          --mask: rgba(2,6,23,.82);
+
+          --header:
+            linear-gradient(
+              90deg,
+              rgba(37,99,235,.18),
+              rgba(124,58,237,.15)
+            );
+
+          --summary:
+            linear-gradient(
+              135deg,
+              rgba(30,64,175,.3),
+              rgba(91,33,182,.25)
+            );
+
+          --shadow:
+            0 24px 65px rgba(2,6,23,.52);
+        }
+      }
+
+      #${CONFIG.panelId} * {
+        box-sizing: border-box;
+      }
+
+      #${CONFIG.panelId}.h3c-dragging {
+        transition: none !important;
+
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+
+        will-change: transform;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-normal-view,
+      #${CONFIG.panelId}
+      .h3c-compact-view,
+      #${CONFIG.panelId}
+      .h3c-mini-view {
+        display: none;
+      }
+
+      #${CONFIG.panelId}[data-display-mode="normal"]
+      .h3c-normal-view {
+        display: block;
+      }
+
+      #${CONFIG.panelId}[data-display-mode="compact"] {
+        width:
+          min(
+            var(--h3c-compact-width),
+            calc(100vw - 20px)
+          );
+      }
+
+      #${CONFIG.panelId}[data-display-mode="compact"]
+      .h3c-compact-view {
+        display: block;
+      }
+
+      #${CONFIG.panelId}[data-display-mode="mini"] {
+        width: fit-content;
+        min-width: 0;
+        max-width: calc(100vw - 20px);
+
+        border-radius: 30px;
+      }
+
+      #${CONFIG.panelId}[data-display-mode="mini"]
+      .h3c-mini-view {
+        display: flex;
+      }
+
+      #${CONFIG.panelId} .h3c-svg {
+        display: block;
+
+        width: 17px;
+        height: 17px;
+
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+
+        pointer-events: none;
+
+        transition:
+          transform .15s ease;
+      }
+
+      #${CONFIG.panelId} button {
+        height: 31px;
+        padding: 0 10px;
+
+        color: var(--primaryText);
+        font-size: 12px;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 8px;
+        outline: none;
+
+        background:
+          var(--primarySoft);
+
+        cursor: pointer;
+
+        transition:
+          transform .12s ease,
+          border-color .12s ease,
+          filter .12s ease,
+          opacity .12s ease;
+      }
+
+      #${CONFIG.panelId} button:hover {
+        border-color: var(--border2);
+        filter: brightness(.98);
+      }
+
+      #${CONFIG.panelId} button:active {
+        transform: translateY(1px);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-icon-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+
+        width: 31px;
+        min-width: 31px;
+        padding: 0;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-icon-button:hover
+      .h3c-svg {
+        transform: scale(1.1);
+      }
+
+      #${CONFIG.panelId}
+      [data-action="toggle-colors"]:not(.h3c-color-enabled) {
+        color: var(--muted);
+        opacity: .65;
+
+        background: var(--bg2);
+      }
+
+      #${CONFIG.panelId}
+      [data-action="toggle-colors"].h3c-color-enabled {
+        color: var(--primaryText);
+
+        border-color: var(--primary);
+        background: var(--primarySoft);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-refresh-button.h3c-refreshing
+      .h3c-svg {
+        animation:
+          h3c-spin .5s linear infinite;
+      }
+
+      @keyframes h3c-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      #${CONFIG.panelId}
+      .h3c-header,
+      #${CONFIG.panelId}
+      .h3c-compact-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        padding: 13px 15px;
+
+        border-bottom:
+          1px solid var(--border);
+
+        background: var(--header);
+
+        cursor: grab;
+        user-select: none;
+        touch-action: none;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-compact-header {
+        padding: 10px 12px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-handle-dragging {
+        cursor: grabbing;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-title-wrap {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+
+        min-width: 0;
+        pointer-events: none;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-title-wrap > strong {
+        overflow: hidden;
+
+        font-size: 15px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-brand-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        width: 30px;
+        height: 30px;
+        flex: 0 0 30px;
+
+        color: #fff;
+
+        border-radius: 9px;
+
+        background:
+          linear-gradient(
+            135deg,
+            var(--primary),
+            #8b5cf6
+          );
+      }
+
+      #${CONFIG.panelId}
+      .h3c-brand-small {
+        width: 27px;
+        height: 27px;
+        flex-basis: 27px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-actions {
+        display: flex;
+        align-items: center;
+        flex: 0 0 auto;
+        gap: 6px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-mini-view {
+        align-items: center;
+        justify-content: flex-start;
+        gap: 9px;
+
+        width: max-content;
+        max-width: calc(100vw - 20px);
+        min-height: 56px;
+        padding: 8px 10px;
+
+        background: var(--header);
+
+        cursor: grab;
+        user-select: none;
+        touch-action: none;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-mini-text,
+      #${CONFIG.panelId}
+      .h3c-mini-chevron {
+        pointer-events: none;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-mini-text {
+        flex: 0 0 auto;
+        min-width: 0;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-mini-label {
+        color: var(--text2);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-mini-value {
+        margin-top: 1px;
+
+        font-size: 16px;
+        font-weight: 750;
+        white-space: nowrap;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-mini-extra {
+        margin-top: 2px;
+
+        color: var(--weekend);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-mini-chevron {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        width: 26px;
+        height: 26px;
+        flex: 0 0 26px;
+
+        color: var(--primaryText);
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 50%;
+
+        background:
+          var(--primarySoft);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-compact-body {
+        padding: 11px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-compact-month {
+        margin-bottom: 8px;
+
+        color: var(--muted);
+        font-size: 10px;
+        text-align: center;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-compact-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        padding: 11px 12px;
+
+        color: var(--text2);
+        font-size: 11px;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 11px;
+
+        background: var(--summary);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-compact-value {
+        font-size: 23px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-compact-grid {
+        display: grid;
+
+        grid-template-columns:
+          repeat(
+            2,
+            minmax(0, 1fr)
+          );
+
+        gap: 7px;
+        margin-top: 8px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-compact-grid > div {
+        padding: 8px 3px;
+        text-align: center;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 9px;
+
+        background: var(--card);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-compact-grid small {
+        display: block;
+
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-compact-grid strong {
+        display: block;
+
+        margin-top: 3px;
+        font-size: 13px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-content {
+        max-height:
+          min(
+            735px,
+            calc(100vh - 130px)
+          );
+
+        padding: 14px;
+        overflow-y: auto;
+
+        overscroll-behavior: contain;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-content::-webkit-scrollbar,
+      #${CONFIG.panelId}
+      .h3c-settings-dialog::-webkit-scrollbar,
+      #${CONFIG.panelId}
+      .h3c-settings-mask::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-content::-webkit-scrollbar-thumb,
+      #${CONFIG.panelId}
+      .h3c-settings-dialog::-webkit-scrollbar-thumb,
+      #${CONFIG.panelId}
+      .h3c-settings-mask::-webkit-scrollbar-thumb {
+        border-radius: 10px;
+        background: var(--border2);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-content::-webkit-scrollbar-track,
+      #${CONFIG.panelId}
+      .h3c-settings-dialog::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-range {
+        margin-bottom: 10px;
+        padding: 8px 10px;
+
+        color: var(--text2);
+        font-size: 12px;
+        text-align: center;
+        line-height: 1.6;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 9px;
+
+        background: var(--bg2);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-summary {
+        margin-bottom: 12px;
+        padding: 18px;
+
+        color: var(--text2);
+        font-size: 12px;
+        text-align: center;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 12px;
+
+        background: var(--summary);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-summary strong {
+        display: block;
+
+        margin-top: 6px;
+        font-size: 31px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-positive {
+        color: var(--positive) !important;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-negative {
+        color: var(--negative) !important;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-zero {
+        color: var(--text) !important;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-warning {
+        color: var(--warning) !important;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-danger {
+        color: var(--danger) !important;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-weekend-value {
+        color: var(--weekend) !important;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-special-value {
+        color: var(--special) !important;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 9px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-card {
+        padding: 11px 8px;
+
+        text-align: center;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 10px;
+
+        background: var(--card);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-card-label {
+        color: var(--text2);
+        font-size: 11px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-card-value {
+        margin-top: 4px;
+
+        font-size: 17px;
+        font-weight: 700;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-suggestion {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+
+        margin-top: 10px;
+        padding: 11px;
+
+        color: var(--text2);
+        font-size: 11px;
+        line-height: 1.65;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 10px;
+
+        background: var(--bg2);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-suggestion strong {
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-suggestion-warning {
+        border-color: var(--warning);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-suggestion-success {
+        border-color: var(--positive);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-rule {
+        margin-top: 10px;
+        padding: 10px;
+
+        color: var(--text2);
+        font-size: 11px;
+        line-height: 1.75;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 9px;
+
+        background: var(--bg2);
+      }
+
+      #${CONFIG.panelId} details {
+        margin-top: 10px;
+        padding: 9px 10px;
+
+        font-size: 11px;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 9px;
+
+        background: var(--bg2);
+      }
+
+      #${CONFIG.panelId} summary {
+        color: var(--text2);
+        font-weight: 650;
+
+        cursor: pointer;
+        user-select: none;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-state {
+        float: right;
+
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 500;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px 10px;
+
+        margin-top: 11px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-grid > div {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+
+        min-width: 0;
+
+        color: var(--text2);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-dot {
+        display: inline-block;
+
+        width: 11px;
+        height: 11px;
+        flex: 0 0 11px;
+
+        border:
+          1px solid transparent;
+
+        border-radius: 3px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-positive {
+        border-color: #34d399;
+        background: rgba(16,185,129,.24);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-negative {
+        border-color: #fb7185;
+        background: rgba(244,63,94,.22);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-weekend {
+        border-color: #38bdf8;
+        background: rgba(14,165,233,.22);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-invalid {
+        border-color: #fbbf24;
+        background: rgba(245,158,11,.24);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-special {
+        border-color: #c084fc;
+        background: rgba(168,85,247,.22);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-zero {
+        border-color: #94a3b8;
+        background: rgba(148,163,184,.16);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-legend-note {
+        margin-top: 10px;
+        padding-top: 8px;
+
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.65;
+
+        border-top:
+          1px dashed var(--border);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-trend-description {
+        margin-top: 7px;
+
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-trend-chart {
+        display: block;
+
+        width: 100%;
+        margin-top: 5px;
+        overflow: visible;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-chart-axis {
+        stroke: var(--border2);
+        stroke-width: 1;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-chart-label {
+        fill: var(--text2);
+        font-size: 9px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-chart-value {
+        font-size: 8px;
+        font-weight: 650;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-chart-empty {
+        fill: var(--muted);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-details-list {
+        margin-top: 9px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-detail-row {
+        padding: 9px 5px;
+
+        border-bottom:
+          1px solid var(--border);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-detail-row:last-child {
+        border-bottom: 0;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-invalid-row {
+        margin: 4px 0;
+
+        border:
+          1px solid var(--warning);
+
+        border-radius: 8px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-special-row {
+        margin: 4px 0;
+
+        border:
+          1px solid var(--special);
+
+        border-radius: 8px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-detail-main {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-detail-sub {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+
+        gap: 4px 10px;
+        margin-top: 6px;
+
+        color: var(--text2);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-detail-reason {
+        grid-column: 1/-1;
+        color: var(--warning);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-detail-leave {
+        margin-left: 6px;
+        padding: 1px 5px;
+
+        font-size: 9px;
+        font-weight: 500;
+
+        color: var(--special);
+
+        border:
+          1px solid var(--special);
+
+        border-radius: 4px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-invalid-tag,
+      #${CONFIG.panelId}
+      .h3c-special-tag {
+        margin-left: 4px;
+        padding: 1px 5px;
+
+        font-size: 9px;
+
+        border-radius: 5px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-invalid-tag {
+        color: var(--warning);
+
+        border:
+          1px solid var(--warning);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-special-tag {
+        color: var(--special);
+
+        border:
+          1px solid var(--special);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-empty {
+        padding: 28px 10px;
+
+        color: var(--text2);
+        text-align: center;
+        line-height: 1.8;
+      }
+
+      /*
+       * ========================================================
+       * 设置弹窗滚动修复
+       * ========================================================
+       *
+       * 1. fixed 定位覆盖整个浏览器视口；
+       * 2. 不再受考勤面板本身高度限制；
+       * 3. 外层和弹窗均允许滚动；
+       * 4. 使用 dvh 适配浏览器实际可视区域；
+       * 5. 兼容不支持 dvh 的旧浏览器。
+       */
+      #${CONFIG.panelId}
+      .h3c-settings-mask {
+        display: none;
+
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 2147483647;
+
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+        min-width: 0;
+        min-height: 0;
+
+        align-items: flex-start;
+        justify-content: center;
+
+        padding:
+          max(20px, env(safe-area-inset-top))
+          max(16px, env(safe-area-inset-right))
+          max(20px, env(safe-area-inset-bottom))
+          max(16px, env(safe-area-inset-left));
+
+        overflow-x: hidden;
+        overflow-y: auto;
+
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+
+        background: var(--mask);
+
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-settings-mask.h3c-show {
+        display: flex;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-settings-dialog {
+        position: relative;
+
+        width:
+          min(
+            430px,
+            calc(100vw - 32px)
+          );
+
+        /*
+         * 先使用 vh 作为兼容方案，
+         * 再使用 dvh 覆盖。
+         */
+        max-height:
+          calc(100vh - 40px);
+
+        max-height:
+          calc(100dvh - 40px);
+
+        margin: auto 0;
+        padding: 16px 14px 18px;
+
+        overflow-x: hidden;
+        overflow-y: auto;
+
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+
+        scrollbar-gutter: stable;
+
+        color: var(--text);
+
+        border:
+          1px solid var(--border2);
+
+        border-radius: 14px;
+
+        background: var(--bg);
+
+        box-shadow:
+          0 24px 80px rgba(2,6,23,.4);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-settings-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        position: sticky;
+        top: -16px;
+        z-index: 3;
+
+        margin:
+          -16px -14px 14px;
+
+        padding: 14px;
+
+        font-size: 16px;
+
+        border-bottom:
+          1px solid var(--border);
+
+        background: var(--bg);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-setting-row {
+        display: grid;
+
+        grid-template-columns:
+          minmax(0, 1fr) 135px;
+
+        align-items: center;
+        gap: 10px;
+
+        margin-bottom: 10px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-setting-label {
+        color: var(--text2);
+        font-size: 12px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-setting-row small,
+      #${CONFIG.panelId}
+      .h3c-setting-range-row small {
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-time-input,
+      #${CONFIG.panelId}
+      .h3c-select {
+        width: 100%;
+        height: 35px;
+        min-width: 0;
+
+        padding: 0 9px;
+
+        color: var(--text);
+
+        border:
+          1px solid var(--border2);
+
+        border-radius: 8px;
+        outline: none;
+
+        background: var(--card);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-setting-range-row {
+        margin-bottom: 12px;
+        padding: 9px;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 9px;
+
+        background: var(--bg2);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-setting-range-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-range-output {
+        min-width: 54px;
+        padding: 3px 7px;
+
+        color: var(--primaryText);
+        font-size: 11px;
+        font-weight: 700;
+        text-align: center;
+
+        border-radius: 6px;
+
+        background: var(--primarySoft);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-range-input {
+        width: 100%;
+        margin-top: 9px;
+
+        accent-color: var(--primary);
+        cursor: pointer;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-checkbox-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        margin: 12px 0;
+        padding: 9px;
+
+        color: var(--text2);
+        font-size: 12px;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 8px;
+
+        background: var(--bg2);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-checkbox-row input {
+        width: 16px;
+        height: 16px;
+
+        accent-color: var(--primary);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-setting-preview {
+        margin: 12px 0;
+        padding: 9px;
+
+        color: var(--text2);
+        font-size: 11px;
+        line-height: 1.7;
+
+        border:
+          1px solid var(--border);
+
+        border-radius: 8px;
+
+        background: var(--bg2);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-setting-error {
+        margin-bottom: 10px;
+
+        color: var(--danger);
+        font-size: 11px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-setting-actions {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+
+        position: sticky;
+        bottom: -18px;
+        z-index: 3;
+
+        margin:
+          12px -14px -18px;
+
+        padding: 12px 14px 14px;
+
+        border-top:
+          1px solid var(--border);
+
+        background: var(--bg);
+      }
+
+      #${CONFIG.panelId}
+      .h3c-setting-actions > div {
+        display: flex;
+        gap: 7px;
+      }
+
+      #${CONFIG.panelId}
+      .h3c-primary-button {
+        color: #fff;
+
+        border-color: var(--primary);
+
+        background: var(--primary);
+      }
+
+      ${getStatusSelector("positive")} {
+        box-shadow:
+          inset 0 0 0 2px
+          rgba(52,211,153,.76) !important;
+
+        background:
+          rgba(16,185,129,.1) !important;
+      }
+
+      ${getStatusSelector("negative")} {
+        box-shadow:
+          inset 0 0 0 2px
+          rgba(251,113,133,.76) !important;
+
+        background:
+          rgba(244,63,94,.09) !important;
+      }
+
+      ${getStatusSelector("invalid")} {
+        box-shadow:
+          inset 0 0 0 2px
+          rgba(251,191,36,.84) !important;
+
+        background:
+          rgba(245,158,11,.13) !important;
+      }
+
+      ${getStatusSelector("weekend")} {
+        box-shadow:
+          inset 0 0 0 2px
+          rgba(56,189,248,.78) !important;
+
+        background:
+          rgba(14,165,233,.11) !important;
+      }
+
+      ${getStatusSelector("special")} {
+        box-shadow:
+          inset 0 0 0 2px
+          rgba(192,132,252,.82) !important;
+
+        background:
+          rgba(168,85,247,.12) !important;
+      }
+
+      ${getStatusSelector("zero")} {
+        box-shadow:
+          inset 0 0 0 1px
+          rgba(148,163,184,.24) !important;
+      }
+
+      @media (max-width: 560px) {
+        #${CONFIG.panelId}[data-display-mode="normal"] {
+          width:
+            calc(100vw - 20px);
+        }
+
+        #${CONFIG.panelId}[data-display-mode="compact"] {
+          width:
+            min(
+              var(--h3c-compact-width),
+              calc(100vw - 20px)
+            );
+        }
+
+        #${CONFIG.panelId}
+        .h3c-setting-row {
+          grid-template-columns:
+            minmax(0, 1fr) 115px;
+        }
+
+        #${CONFIG.panelId}
+        .h3c-detail-sub,
+        #${CONFIG.panelId}
+        .h3c-legend-grid {
+          grid-template-columns: 1fr;
+        }
+
+        #${CONFIG.panelId}
+        .h3c-settings-mask {
+          padding: 10px;
+        }
+
+        #${CONFIG.panelId}
+        .h3c-settings-dialog {
+          width: 100%;
+
+          max-height:
+            calc(100vh - 20px);
+
+          max-height:
+            calc(100dvh - 20px);
+
+          border-radius: 12px;
+        }
+
+        #${CONFIG.panelId}
+        .h3c-setting-actions {
+          flex-direction: column;
+        }
+
+        #${CONFIG.panelId}
+        .h3c-setting-actions > div {
+          justify-content: flex-end;
+        }
+      }
+
+      /*
+       * 高度较低或浏览器缩放较大时，
+       * 减少设置弹窗上下留白。
+       */
+      @media (max-height: 800px) {
+        #${CONFIG.panelId}
+        .h3c-settings-mask {
+          padding-top: 10px;
+          padding-bottom: 10px;
+        }
+
+        #${CONFIG.panelId}
+        .h3c-settings-dialog {
+          max-height:
+            calc(100vh - 20px);
+
+          max-height:
+            calc(100dvh - 20px);
+        }
+      }
+    `;
+
+    try {
+      const styleElement =
+        GM_addStyle(css);
+
+      if (
+        styleElement &&
+        styleElement.nodeType === 1
+      ) {
+        styleElement.id =
+          CONFIG.styleId;
+      }
+
+      styleInstalled = true;
+    } catch (error) {
+      console.error(
+        "[H3C 考勤助手] 使用 GM_addStyle 注入样式失败：",
+        error
+      );
+    }
+  }
+
+  // ============================================================
+  // 启动
+  // ============================================================
+
+  function start() {
+    if (!isTargetPage()) {
+      return;
+    }
+
+    installStyle();
+    createPanel();
+    attachCalendarObserver();
+    installDiscoveryObserver();
+    scheduleRefresh(0);
+
+    window.addEventListener(
+      "resize",
+      keepInsideViewport,
+      {
+        passive: true
+      }
+    );
+  }
+
+  if (document.body) {
+    start();
+  } else {
+    window.addEventListener(
+      "DOMContentLoaded",
+      start,
+      {
+        once: true
+      }
+    );
+  }
+})();
