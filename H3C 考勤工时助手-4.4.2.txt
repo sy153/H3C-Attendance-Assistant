@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         H3C 考勤工时助手
 // @namespace    local.h3c.attendance
-// @version      4.4.2
+// @version      4.4.4
 // @description  H3C 考勤工时差、周末加班、假期识别、日历着色、主题、趋势和补时建议
 // @icon         data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%3Cstop%20stop-color%3D%22%232563eb%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%238b5cf6%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22url%28%23g%29%22%2F%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2232%22%20r%3D%2220%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%225%22%2F%3E%3Cpath%20d%3D%22M32%2019v14l10%206%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2232%22%20r%3D%223%22%20fill%3D%22white%22%2F%3E%3C%2Fsvg%3E
 // @match        https://eip-cw.h3c.com/myCenter/kaoqin*
@@ -31,7 +31,7 @@
     dragThreshold: 3,
 
     panelId: "h3c-attendance-helper",
-    styleId: "h3c-attendance-helper-style-v441",
+    styleId: "h3c-attendance-helper-style-v444",
 
     positionKey:
       "h3c-attendance-helper-position-v10",
@@ -1057,12 +1057,22 @@
         .replace(/\s+/g, " ")
         .trim();
 
-    if (
-      /调休上班|补班|正常上班/.test(text) ||
-      hasClassFragment(
-        cell,
-        "holiday1"
+    const title =
+      String(
+        cell.getAttribute("title") || ""
       )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    // 合并文本与 title 一起检查
+    const combined = `${text} ${title}`;
+
+    // 1. 明确的调休上班标记
+    if (
+      /调休上班|补班|正常上班/.test(combined) ||
+      hasClassFragment(cell, "holiday1") ||
+      hasClassFragment(cell, "holiday_work") ||
+      hasClassFragment(cell, "holiday-work")
     ) {
       return {
         type: "workday",
@@ -1073,11 +1083,9 @@
       };
     }
 
-    for (
-      const rule
-      of SPECIAL_DAY_RULES
-    ) {
-      if (rule.pattern.test(text)) {
+    // 2. 特殊假期/出差等
+    for (const rule of SPECIAL_DAY_RULES) {
+      if (rule.pattern.test(combined)) {
         return {
           type: rule.type,
           label: rule.label,
@@ -1088,13 +1096,30 @@
       }
     }
 
-    if (
-      hasClassFragment(
-        cell,
-        "holiday"
-      ) ||
-      isNaturalWeekend(date)
-    ) {
+    // 3. 周末调休兜底：日期是周末，但含“上班”且不含“休息/假期”，视为工作日
+    if (isNaturalWeekend(date)) {
+      if (/上班/.test(combined) && !/休息|假期/.test(combined)) {
+        return {
+          type: "workday",
+          label: "工作日",
+          mode: "workday",
+          isWeekend: false,
+          isSpecial: false
+        };
+      }
+
+      // 有 holiday 类则视为休息日
+      if (hasClassFragment(cell, "holiday")) {
+        return {
+          type: "weekend",
+          label: "休息日",
+          mode: "weekend",
+          isWeekend: true,
+          isSpecial: false
+        };
+      }
+
+      // 否则就是普通休息日
       return {
         type: "weekend",
         label: "休息日",
@@ -1104,6 +1129,7 @@
       };
     }
 
+    // 4. 默认普通工作日
     return {
       type: "workday",
       label: "工作日",
@@ -1321,7 +1347,6 @@
         .replace(/\s+/g, " ")
         .trim();
 
-    // 匹配形如“年休假（08:30-12:00）”或“事假（09:00-17:30）”
     const match =
       text.match(
         /[（(](\d{1,2}:\d{2})\s*[-~至]\s*(\d{1,2}:\d{2})[)）]/
@@ -1338,7 +1363,6 @@
       return null;
     }
 
-    // 处理跨天（基本不会出现，但保留逻辑）
     const leaveStart = start;
     const leaveEnd = end < start ? end + 24 * 60 : end;
 
@@ -1437,7 +1461,6 @@
         leaveEnd: null
       };
 
-      // 如果是请假类特殊天，尝试解析请假时间范围
       if (
         record.isSpecial &&
         record.dayMode === "leave"
@@ -1605,7 +1628,6 @@
     record,
     rules
   ) {
-    // 如果不是特殊天，或特殊天但有请假时间，则需要检查打卡
     if (record.isSpecial && !record.leaveStart) {
       return [];
     }
@@ -1672,7 +1694,6 @@
     rules,
     standard
   ) {
-    // 特殊天且有请假时间：按部分出勤计算
     if (record.isSpecial && record.leaveStart != null) {
       const leaveSpan =
         record.leaveEnd -
@@ -1695,7 +1716,6 @@
       const expectedNet =
         standard - leaveNet;
 
-      // 打卡不完整 -> 缺勤
       if (
         !Number.isFinite(
           record.clockIn
@@ -1771,7 +1791,6 @@
       };
     }
 
-    // 原来的特殊天豁免逻辑（无请假时间）
     if (record.isSpecial) {
       return {
         overtimeMinutes: 0,
@@ -1921,25 +1940,21 @@
 
       summary.details.push(detail);
 
-      // 出差/外出等 official 模式仍计为工作日
       if (record.dayMode === "official") {
         summary.weekdayDays += 1;
       }
-      // 无请假时间的特殊天（完全豁免）不参与统计
       else if (
         record.isSpecial &&
         !record.leaveStart
       ) {
         // 跳过
       }
-      // 有请假时间的特殊天，视为工作日
       else if (
         record.isSpecial &&
         record.leaveStart != null
       ) {
         summary.weekdayDays += 1;
       }
-      // 普通工作日或周末
       else {
         if (record.isWeekend) {
           summary.weekendDays += 1;
@@ -2555,12 +2570,10 @@
       let status = "zero";
       let tip = "工时持平";
 
-      // 有请假时间的特殊天，按普通工作日着色
       if (
         detail.isSpecial &&
         detail.leaveStart != null
       ) {
-        // 按实际工时差着色
         if (detail.isInvalid) {
           status = "invalid";
           tip =
@@ -2588,7 +2601,6 @@
           tip = "工时持平";
         }
       }
-      // 原有的特殊天颜色
       else if (detail.isSpecial) {
         status = "special";
         tip =
@@ -2984,7 +2996,6 @@
             );
         }
 
-        // 请假时间显示
         const leaveInfo =
           detail.leaveStart != null
             ? `请假：${formatClock(detail.leaveStart)} - ${formatClock(detail.leaveEnd)}`
@@ -3907,11 +3918,6 @@
 
     state.settingsOpen = true;
 
-    /*
-     * 打开设置时添加专用状态类。
-     * 该类会解除面板 overflow 裁切，
-     * 使固定定位的设置弹窗覆盖整个视口。
-     */
     state.panel.classList.add(
       "h3c-settings-open"
     );
@@ -3925,9 +3931,6 @@
       "h3c-show"
     );
 
-    /*
-     * 每次打开时回到弹窗顶部。
-     */
     const dialog =
       state.panel.querySelector(
         ".h3c-settings-dialog"
@@ -4684,9 +4687,6 @@
       }
     );
 
-    /*
-     * 防止设置弹窗中的滚轮事件传递给网页。
-     */
     mask.addEventListener(
       "wheel",
       event => {
@@ -4720,9 +4720,6 @@
       }
     );
 
-    /*
-     * Esc 关闭设置。
-     */
     document.addEventListener(
       "keydown",
       event => {
@@ -5759,13 +5756,6 @@
           box-shadow .16s ease;
       }
 
-      /*
-       * 设置弹窗打开时解除裁切。
-       *
-       * 同时暂时关闭面板自身的 backdrop-filter，
-       * 避免部分 Chromium 版本将 fixed 子元素
-       * 错误限制在面板的包含块中。
-       */
       #${CONFIG.panelId}.h3c-settings-open {
         overflow: visible !important;
 
@@ -6909,17 +6899,6 @@
         line-height: 1.8;
       }
 
-      /*
-       * ========================================================
-       * 设置弹窗滚动修复
-       * ========================================================
-       *
-       * 1. fixed 定位覆盖整个浏览器视口；
-       * 2. 不再受考勤面板本身高度限制；
-       * 3. 外层和弹窗均允许滚动；
-       * 4. 使用 dvh 适配浏览器实际可视区域；
-       * 5. 兼容不支持 dvh 的旧浏览器。
-       */
       #${CONFIG.panelId}
       .h3c-settings-mask {
         display: none;
@@ -6970,10 +6949,6 @@
             calc(100vw - 32px)
           );
 
-        /*
-         * 先使用 vh 作为兼容方案，
-         * 再使用 dvh 覆盖。
-         */
         max-height:
           calc(100vh - 40px);
 
@@ -7316,10 +7291,6 @@
         }
       }
 
-      /*
-       * 高度较低或浏览器缩放较大时，
-       * 减少设置弹窗上下留白。
-       */
       @media (max-height: 800px) {
         #${CONFIG.panelId}
         .h3c-settings-mask {
